@@ -7,15 +7,15 @@ is the real one: the clock moves through it as fast as you choose, forward or ba
 
 ## The desktop app (for anyone)
 
-Download from this repository's **Releases**. Nothing else to install: the app carries its own chain.
+Download from [Releases](https://github.com/Zeemzo/ecofutures-sim/releases/latest). Nothing else to install: the app carries its own chain.
 
 | | |
 |---|---|
-| Mac with Apple silicon (M1–M4) | `EcoFutures Simulator-1.1.0-arm64.dmg` |
-| Mac with Intel | `EcoFutures Simulator-1.1.0.dmg` |
-| Windows (64-bit) | `EcoFutures Simulator-1.1.0-win.zip` |
-| Linux (x64) | `EcoFutures Simulator-1.1.0.AppImage`, or `ecofutures-simulator-1.1.0.tar.gz` |
-| Linux (ARM64) | `EcoFutures Simulator-1.1.0-arm64.AppImage`, or `ecofutures-simulator-1.1.0-arm64.tar.gz` |
+| Mac with Apple silicon (M1–M4) | `EcoFutures.Simulator-1.1.0-arm64.dmg` |
+| Mac with Intel | `EcoFutures.Simulator-1.1.0.dmg` |
+| Windows (64-bit) | `EcoFutures.Simulator-1.1.0-win.zip` |
+| Linux (x64) | `EcoFutures.Simulator-1.1.0.AppImage`, or `ecofutures-simulator-1.1.0.tar.gz` |
+| Linux (ARM64) | `EcoFutures.Simulator-1.1.0-arm64.AppImage`, or `ecofutures-simulator-1.1.0-arm64.tar.gz` |
 
 **Mac.** Open the disk image and drag the app to Applications. The app is not signed with an Apple Developer ID,
 so the first time macOS refuses to open it: open **System Settings → Privacy & Security**, scroll to the message
@@ -28,8 +28,8 @@ unrecognised app, choose **More info → Run anyway**.
 **Linux.** Make the AppImage executable and run it:
 
 ```bash
-chmod +x "EcoFutures Simulator-1.1.0.AppImage"
-./"EcoFutures Simulator-1.1.0.AppImage"
+chmod +x EcoFutures.Simulator-1.1.0.AppImage
+./EcoFutures.Simulator-1.1.0.AppImage
 ```
 
 If it asks for FUSE, install `libfuse2` (`libfuse2t64` on Ubuntu 24.04), or use the `.tar.gz`: unpack it and run
