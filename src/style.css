@@ -249,7 +249,7 @@ select, input { border: 1px solid var(--line); background: var(--surface); borde
 .setup-head p { max-width: 90ch; }
 .setup-grid { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; align-items: start; }
 @media (max-width: 900px) {
-  .setup-grid { grid-template-columns: 1fr; }
+  .setup-grid { grid-template-columns: minmax(0, 1fr); }
   /* one column: the scenarios become a row to swipe through, above the settings rather than pinned over them */
   .scenarios { position: static; grid-auto-flow: column; grid-auto-columns: minmax(230px, 78%); overflow-x: auto; padding-bottom: 4px; }
 }
@@ -262,8 +262,8 @@ select, input { border: 1px solid var(--line); background: var(--surface); borde
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); padding: 8px 10px 0; }
 .tabs button { border: 0; border-radius: 6px 6px 0 0; background: transparent; padding: 10px 14px; font-weight: 600; color: var(--muted); }
 .tabs button[aria-selected="true"] { color: var(--ink); box-shadow: inset 0 -2px 0 var(--moss); }
-.panel-c { padding: 6px 18px 18px; display: grid; gap: 4px; }
-fieldset { border: 0; border-bottom: 1px solid var(--line); padding: 14px 0; margin: 0; display: grid; gap: 6px; min-width: 0; }
+.panel-c { padding: 6px 18px 18px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+fieldset { border: 0; border-bottom: 1px solid var(--line); padding: 14px 0; margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; }
 fieldset:last-child { border-bottom: 0; }
 legend { font: 600 15px var(--display); padding: 0; margin-bottom: 4px; float: left; width: 100%; }
 fieldset h4 { margin: 8px 0 2px; font: 600 13px var(--display); color: var(--muted); }
@@ -288,6 +288,31 @@ td.fixed { font-family: var(--mono); color: var(--muted); text-align: right; pad
 .table input, .table select { font-size: 12.5px; padding: 5px 6px; }
 .table input[type="number"] { font-family: var(--mono); }
 .add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; font-size: 13px; color: var(--muted); }
+.add select { min-width: 0; max-width: 100%; }
+/* phones: labels over their inputs where a row is too narrow for both, and each country a card of labelled fields */
+@media (max-width: 640px) {
+  .panel-c { padding: 4px 14px 14px; }
+  .tabs { padding: 6px 6px 0; }
+  .tabs button { padding: 10px 10px; }
+  .f { gap: 10px; }
+  .f input[type="number"] { width: 92px; }
+  .f small { width: 62px; min-width: 62px; white-space: nowrap; }
+  .add select { flex: 1 1 100%; }
+  .table.countries { border: 0; overflow: visible; }
+  .table.countries table, .table.countries tbody, .table.countries tr { display: block; width: 100%; }
+  .table.countries thead { display: none; }
+  .table.countries tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; padding: 12px; margin-bottom: 10px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+  .table.countries td { display: grid; gap: 4px; padding: 0; border: 0; min-width: 0; }
+  .table.countries td::before { content: attr(data-label); font: 600 10.5px/1.2 var(--display); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .table.countries td.wide, .table.countries td.act { grid-column: 1 / -1; }
+  .table.countries td:nth-child(1) { order: -2; } /* the ISO number and the two-letter code side by side, first */
+  .table.countries td:nth-child(3) { order: -1; }
+  .table.countries td.act::before { content: none; }
+  .table.countries td input, .table.countries td select { width: 100% !important; min-width: 0; }
+  .setup-foot .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .setup-foot .row button, .setup-foot .row .file { flex: 1 1 auto; }
+}
 .add input { width: 110px; }
 .flows { margin: 4px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); display: grid; gap: 3px; }
 .setup-foot { display: grid; gap: 10px; position: sticky; bottom: 0; background: var(--ground); padding: 12px 0; border-top: 1px solid var(--line); }

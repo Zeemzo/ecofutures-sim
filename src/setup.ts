@@ -105,7 +105,7 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
     if (f.kind === "check") {
       return `<label class="f check-f"><input type="checkbox" data-path="${f.path}" ${v ? "checked" : ""}><span>${esc(f.label)}</span></label>`;
     }
-    return `<label class="f"><span>${esc(f.label)}</span><span class="in"><input type="number" data-path="${f.path}" value="${v}" ${f.min !== undefined ? `min="${f.min}"` : `min="0"`} ${f.max !== undefined ? `max="${f.max}"` : ""} step="${f.step ?? "any"}">${f.unit ? `<small>${esc(f.unit)}</small>` : ""}${base !== undefined && base !== v ? `<small class="prod">${base.toLocaleString("en-US")}</small>` : ""}</span></label>`;
+    return `<label class="f"><span>${esc(f.label)}</span><span class="in"><input type="number" data-path="${f.path}" value="${v}" ${f.min !== undefined ? `min="${f.min}"` : `min="0"`} ${f.max !== undefined ? `max="${f.max}"` : ""} step="${f.step ?? "any"}"><small>${f.unit ? esc(f.unit) : ""}</small>${base !== undefined && base !== v ? `<small class="prod">${base.toLocaleString("en-US")}</small>` : ""}</span></label>`;
   }
 
   function groups(gs: Group[]) {
@@ -120,15 +120,17 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
 
   function countries() {
     const flowOpts = (sel: number) => sc.flows.map((f) => `<option value="${f.id}" ${f.id === sel ? "selected" : ""}>${f.id}. ${esc(f.name)}</option>`).join("");
+    // each cell carries its column's label, so a narrow screen shows a country as a card of labelled fields
     const rows = sc.countries.map((c, i) => `<tr>${COUNTRY_COLS.map((col) => {
       const v = c[col.key];
-      if (col.key === "flowId") return `<td><select data-country="${i}" data-key="flowId">${flowOpts(c.flowId)}</select></td>`;
-      if (col.key === "name" || col.key === "short") return `<td><input type="text" data-country="${i}" data-key="${col.key}" value="${esc(String(v))}" style="width:${col.w}"></td>`;
-      return `<td><input type="number" data-country="${i}" data-key="${col.key}" value="${v}" min="${col.min ?? 0}" ${col.max ? `max="${col.max}"` : ""} style="width:${col.w ?? "72px"}"></td>`;
-    }).join("")}<td><button type="button" class="ghost" data-remove="${i}" aria-label="Remove ${esc(c.name)}">Remove</button></td></tr>`).join("");
+      const td = (inner: string, cls = "") => `<td data-label="${esc(col.label)}"${cls ? ` class="${cls}"` : ""}>${inner}</td>`;
+      if (col.key === "flowId") return td(`<select data-country="${i}" data-key="flowId" aria-label="${esc(c.name)}: flow">${flowOpts(c.flowId)}</select>`, "wide");
+      if (col.key === "name" || col.key === "short") return td(`<input type="text" data-country="${i}" data-key="${col.key}" value="${esc(String(v))}" style="width:${col.w}" aria-label="${esc(c.name)}: ${esc(col.label)}">`, col.key === "name" ? "wide" : "");
+      return td(`<input type="number" data-country="${i}" data-key="${col.key}" value="${v}" min="${col.min ?? 0}" ${col.max ? `max="${col.max}"` : ""} style="width:${col.w ?? "72px"}" aria-label="${esc(c.name)}: ${esc(col.label)}">`);
+    }).join("")}<td class="act"><button type="button" class="ghost" data-remove="${i}" aria-label="Remove ${esc(c.name)}">Remove</button></td></tr>`).join("");
     const flows = sc.flows.map((f) => `<li><b>${f.id}. ${esc(f.name)}</b>: ${f.steps.map((s) => esc(StepName[s])).join(" → ")}</li>`).join("");
     return `<fieldset><legend>Countries</legend><p class="note">Each country's legal settings, its fees, and its cast: Trust Admins, their organisations, and verifiers in each. The contracts allow at most 10 Trust Admins a country and 5 verifiers an organisation; the limits here leave room for the governance calendar and for recruits.</p>
-      <div class="table"><table><thead><tr>${COUNTRY_COLS.map((c) => `<th>${esc(c.label)}</th>`).join("")}<th></th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="table countries"><table><thead><tr>${COUNTRY_COLS.map((c) => `<th>${esc(c.label)}</th>`).join("")}<th></th></tr></thead><tbody>${rows}</tbody></table></div>
       <div class="add"><label for="newCode">Add a country</label><select id="newCode"><option value="">Choose from all ${ALL_COUNTRIES.length} countries…</option>${ALL_COUNTRIES
         .filter(([n]) => !sc.countries.some((c) => c.code === n))
         .map(([n, a2, name]) => `<option value="${n}">${esc(name)} (${a2}, ${String(n).padStart(3, "0")})</option>`).join("")}</select><button type="button" id="addCountry">Add</button></div>
