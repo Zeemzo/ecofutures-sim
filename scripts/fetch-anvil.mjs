@@ -1,5 +1,5 @@
-// Downloads anvil (Foundry v1.5.1, the version the simulator is tested on) for each desktop platform into
-// resources/bin/<os>-<arch>/, which electron-builder ships inside the app.
+// Downloads anvil (Foundry v1.5.1, the version the simulator is tested on) for each platform into
+// resources/bin/<os>-<arch>/, which electron-builder ships inside the desktop app and android.mjs inside the APK.
 import { execSync } from "node:child_process";
 import { mkdirSync, existsSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -13,6 +13,9 @@ const targets = [
   ["win-x64", `foundry_${VERSION}_win32_amd64.zip`, "anvil.exe"],
   ["linux-x64", `foundry_${VERSION}_linux_amd64.tar.gz`, "anvil"],
   ["linux-arm64", `foundry_${VERSION}_linux_arm64.tar.gz`, "anvil"],
+  // Android: the Alpine builds, linked statically, so they run without the glibc Android does not have
+  ["android-arm64", `foundry_${VERSION}_alpine_arm64.tar.gz`, "anvil"],
+  ["android-x64", `foundry_${VERSION}_alpine_amd64.tar.gz`, "anvil"],
 ];
 const only = process.argv.slice(2);
 for (const [dir, asset, bin] of targets) {

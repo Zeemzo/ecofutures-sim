@@ -11,7 +11,8 @@
     "app": "npm run abis && vite build && electron .",
     "dist:mac": "npm run abis && vite build && node scripts/fetch-anvil.mjs mac-arm64 mac-x64 && electron-builder --mac --arm64 --x64",
     "dist:win": "npm run abis && vite build && node scripts/fetch-anvil.mjs win-x64 && electron-builder --win --x64",
-    "dist:linux": "npm run abis && vite build && node scripts/fetch-anvil.mjs linux-x64 linux-arm64 && electron-builder --linux --x64 --arm64"
+    "dist:linux": "npm run abis && vite build && node scripts/fetch-anvil.mjs linux-x64 linux-arm64 && electron-builder --linux --x64 --arm64",
+    "dist:android": "node scripts/android.mjs"
   },
   "devDependencies": {
     "chart.js": "4.4.1",

@@ -17,7 +17,25 @@ const base = (id: string) => cloneScenario(SCENARIOS.find((s) => s.id === id)!);
 const cases: Case[] = [];
 for (const s of SCENARIOS) {
   if (s.id === "custom") continue;
-  cases.push({ name: s.id, what: s.summary, scenario: cloneScenario(s), years: s.id === "fifteen" ? 16 : 10 });
+  cases.push({ name: s.id, what: s.summary, scenario: cloneScenario(s), years: s.id === "fill" || s.id === "edition-race" ? 70 : s.id === "fifteen" ? 16 : 10 });
+}
+{
+  const s = base("fifteen");
+  s.id = "fast-clock"; s.name = "A fast clock";
+  Object.assign(s.contracts, { yearDays: 120, acceptanceDays: 10, watchdogDays: 5, backstopDays: 4, minAuctionDays: 2, reviewDays: 10,
+    maxVerificationDelayDays: 12, responseDays: 3, panelDays: 3, redrawDays: 3, haltAfter: 2, editionScale: 20000 });
+  for (const c of s.countries) { c.listingDays = 100; if (c.postSaleDays) c.postSaleDays = 20; }
+  s.behaviour.arrivalYears = 15; s.behaviour.arrivalsPerYear = 12;
+  cases.push({ name: s.id, what: "A 120-day protocol year with every window shortened: 10-day review, 5-day watchdog, 3+3+3-day challenges, halts after 2 unattested windows, 100-day listing, 20-day post-sale.", scenario: s, years: 15 });
+}
+{
+  const s = base("fifteen");
+  s.id = "slow-clock"; s.name = "A slow clock";
+  Object.assign(s.contracts, { yearDays: 730, reviewDays: 60, maxVerificationDelayDays: 75, acceptanceDays: 45, watchdogDays: 21, backstopDays: 21,
+    minAuctionDays: 5, responseDays: 10, panelDays: 10, redrawDays: 10, haltAfter: 4, editionScale: 20000 });
+  for (const c of s.countries) { c.listingDays = 600; if (c.postSaleDays) c.postSaleDays = 120; }
+  s.behaviour.arrivalYears = 6; s.behaviour.arrivalsPerYear = 30; s.behaviour.maxTermYears = 12;
+  cases.push({ name: s.id, what: "A two-year protocol year: 60-day review, 21-day watchdog and backstop, 10+10+10-day challenges, halts after 4, 600-day listing.", scenario: s, years: 8 });
 }
 {
   const s = base("fifteen");

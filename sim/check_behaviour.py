@@ -35,7 +35,7 @@ def by(ev, name):
     return [e for e in ev if e["name"] == name]
 
 
-for name in ["fifteen", "challenges", "late", "breaches", "pathb", "new-countries", "holder-failure", "fees", "lean-cast"]:
+for name in ["fifteen", "fill", "challenges", "late", "breaches", "pathb", "edition-race", "new-countries", "holder-failure", "fees", "lean-cast", "fast-clock", "slow-clock"]:
     if not (ROOT / name / "events.jsonl").exists():
         continue
     cfg, ev = load(name)
@@ -45,7 +45,7 @@ for name in ["fifteen", "challenges", "late", "breaches", "pathb", "new-countrie
     ended = collections.Counter(int(e["a"]["reason"]) for e in by(ev, "RequestEnded"))
 
     # arrivals a year: Poisson; the run's arrival period is up to arrivals' end
-    if b["maxRequests"] == 0:
+    if not b.get("fillLand") and b["maxRequests"] == 0:
         run_years = json.load(open(ROOT / name / "config.json")).get("years") or b["arrivalYears"]
         yrs = min(b["arrivalYears"], run_years)
         rate = n_req / yrs

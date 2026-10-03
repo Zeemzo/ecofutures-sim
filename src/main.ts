@@ -8,7 +8,7 @@ import { deploy } from "./deploy";
 import { mountSetup, type Choice } from "./setup";
 import { mountExplorer } from "./explorer";
 import type { Decoded } from "./chain";
-import { FLOWS, type Scenario } from "./config";
+import { FLOWS, PRODUCTION, TIMINGS, LISTING_DAYS, type Scenario } from "./config";
 import { Engine, LAST_EDITION } from "./engine";
 import { Ledger, census, resetCensus, INVARIANTS, standingSale, type Census, type Row, type Stage } from "./ledger";
 import { describe, type Entry, type Category } from "./feed";
@@ -126,6 +126,7 @@ async function boot() {
     const { SCENARIOS, cloneScenario } = await import("./config");
     const sc = cloneScenario(SCENARIOS.find((x) => x.id === q.get("scenario")) ?? SCENARIOS[0]);
     if (q.get("rate")) sc.behaviour.arrivalsPerYear = Number(q.get("rate"));
+    if (q.get("scale")) sc.contracts.editionScale = Number(q.get("scale"));
     await setupProgramme({ scenario: sc, seed: Number(q.get("seed") ?? 20270101) });
     const i = Number(q.get("speed") ?? 4);
     ($("speeds").children[Math.min(Math.max(i, 0), SPEEDS.length - 1)] as HTMLButtonElement).click();
@@ -153,7 +154,7 @@ async function setupProgramme({ scenario, seed }: Choice) {
     S.engine = new Engine(seed, scenario);
     S.ended = false;
     $("endBanner")?.remove();
-    S.engine.onNote = (n) => pushEntry({ t: n.t, rid: n.rid, cat: n.kind === "stranded" ? "alert" : "note", text: n.text, seq: S.seq++ });
+    S.engine.onNote = (n) => pushEntry({ t: n.t, rid: n.rid, cat: n.kind === "stranded" || n.kind === "land-full" ? "alert" : "note", text: n.text, seq: S.seq++ });
     S.ledger = new Ledger();
     S.entries = []; S.raw = []; S.seq = 0; S.samples = []; S.invChecks = 0; S.invFails = [0, 0, 0, 0, 0, 0]; S.seen.clear();
     chartedSamples = -1;
@@ -169,7 +170,9 @@ async function setupProgramme({ scenario, seed }: Choice) {
     S.engine.begin(b.timestamp);
     S.nextSample = b.timestamp;
     S.fullAt = await read<bigint>("tree", "editionEndsAt", [LAST_EDITION - 1]);
-    $("sScale").textContent = `${scenario.name} · production settings`;
+    const changed = TIMINGS.filter((k) => scenario.contracts[k] !== PRODUCTION[k]).length
+      + scenario.countries.filter((c) => c.listingDays !== LISTING_DAYS).length;
+    $("sScale").textContent = `${scenario.name} · ${changed ? `${changed} setting${changed === 1 ? "" : "s"} changed from production` : "production settings"}`;
     await ingest(b.timestamp);
     await refreshCountryStatus();
     await runCensus(true);
@@ -389,7 +392,9 @@ function renderStrip() {
   if (S.census && S.fullAt > 0n) {
     const pct = Math.min(100, Number((S.census.landYears * 10000n) / S.fullAt) / 100);
     $("sLandBar").style.width = `${pct}%`;
-    $("sLandText").textContent = `${pct < 0.1 && pct > 0 ? "<0.1" : pct.toFixed(1)}% of the land to the last edition · edition ${S.census.edition} of ${LAST_EDITION}`;
+    $("sLandText").textContent = S.engine.landFull
+      ? `Land full · edition ${S.census.edition} of ${LAST_EDITION}`
+      : `${pct < 0.1 && pct > 0 ? "<0.1" : pct.toFixed(1)}% of the land to the last edition · edition ${S.census.edition} of ${LAST_EDITION}`;
   }
   const n = S.engine.anomalies.length;
   const a = $("sAnomalies");
@@ -774,7 +779,7 @@ function programmeOver() {
   const item = (k: string, v: string) => `<div><dt>${k}</dt><dd>${v}</dd></div>`;
   const fails = S.invFails.reduce((a, b) => a + b, 0);
   const html = `<section class="banner" id="endBanner"><span class="eyebrow">The end of the programme · ${dateOf(c.t)}</span>
-    <h2>The last term ended ${years} years after the first request</h2>
+    <h2>${e.b.fillLand && e.landFull ? `The land filled in ${((e.landFullAt - e.start) / YEAR).toFixed(1)} years; the last term ended ${years} years after the first request` : `The last term ended ${years} years after the first request`}</h2>
     <p>${fails ? `<b>${fails} invariant checks failed.</b>` : `Every invariant held at all ${S.invChecks.toLocaleString("en-US")} checks.`} ${e.anomalies.length ? `${e.anomalies.length} calls reverted unexpectedly.` : "No call an actor expected to succeed reverted."} Nothing is left in the protocol but ${money(c.registryBal + c.bankBal + c.poolBal, 2)} USDT.</p>
     <dl class="summary">
       ${item("Requests", rows.length.toLocaleString("en-US"))}${item("Terms completed", completed.toLocaleString("en-US"))}

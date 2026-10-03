@@ -45,7 +45,9 @@ export type CountryConfig = {
 
 export type Behaviour = {
   arrivalsPerYear: number;
-  /** Years landowners keep arriving. */
+  /** Stop admitting landowners when the last edition begins. */
+  fillLand: boolean;
+  /** Years landowners keep arriving, when not filling the land. */
   arrivalYears: number;
   /** At most this many requests in all (0 = no limit). */
   maxRequests: number;
@@ -99,8 +101,9 @@ export const PRODUCTION: ContractConfig = {
   baseFee: 50, verifierPermille: 70, taxPermille: 30, serverPermille: 10, editionScale: 1_000_000,
 };
 
-/** The contract settings a run cannot change: every timing, the halt threshold and the edition scale are production's. */
-export const LOCKED: (keyof ContractConfig)[] = [
+/** The contract settings production fixes: every timing, the halt threshold and the edition scale. A run may change
+ *  them; the setup screen shows production's value beside any that differs. */
+export const TIMINGS: (keyof ContractConfig)[] = [
   "yearDays", "acceptanceDays", "watchdogDays", "backstopDays", "minAuctionDays", "reviewDays", "maxVerificationDelayDays",
   "responseDays", "panelDays", "redrawDays", "haltAfter", "editionScale",
 ];
@@ -111,10 +114,10 @@ export const POST_SALE_DAYS = 60;
 
 const recordsAfterSale = (flows: FlowDef[], flowId: number) => flows.find((f) => f.id === flowId)?.steps.includes(Step.RECORDING) ?? false;
 
-/** Puts every locked setting at its production value; returns what it changed, for the person loading the file. */
+/** Puts every timing, the edition scale and each country's windows back at production; returns what it changed. */
 export function toProduction(s: Scenario): string[] {
   const changed: string[] = [];
-  for (const k of LOCKED) {
+  for (const k of TIMINGS) {
     if (s.contracts[k] !== PRODUCTION[k]) changed.push(`${k} ${s.contracts[k]} → ${PRODUCTION[k]}`);
     s.contracts[k] = PRODUCTION[k];
   }
@@ -125,7 +128,6 @@ export function toProduction(s: Scenario): string[] {
     c.listingDays = LISTING_DAYS;
     c.postSaleDays = post;
   }
-  delete (s.behaviour as any).fillLand;
   return changed;
 }
 
@@ -151,7 +153,7 @@ export const KNOWN_COUNTRIES: Record<number, [string, string]> = {
 };
 
 export const DEFAULT_BEHAVIOUR: Behaviour = {
-  arrivalsPerYear: 20, arrivalYears: 15, maxRequests: 0, maxTermYears: 25,
+  arrivalsPerYear: 20, fillLand: false, arrivalYears: 15, maxRequests: 0, maxTermYears: 25,
   cancelPct: 2, claimLapsePct: 2, abandonPct: 2, preMintChallengePct: 14, unsoldPct: 4,
   pathBLapseNothingPct: 8, pathBLapseUnattestedPct: 6,
   attestPct: 72, challengePct: 8,
@@ -163,14 +165,16 @@ export const DEFAULT_BEHAVIOUR: Behaviour = {
 };
 
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x));
-const make = (id: string, name: string, summary: string, b: Partial<Behaviour>, countries = COUNTRIES_V11): Scenario => ({
-  id, name, summary, contracts: { ...PRODUCTION }, countries: clone(countries), flows: clone(FLOWS), behaviour: { ...DEFAULT_BEHAVIOUR, ...b },
+const make = (id: string, name: string, summary: string, b: Partial<Behaviour>, countries = COUNTRIES_V11, c: Partial<ContractConfig> = {}): Scenario => ({
+  id, name, summary, contracts: { ...PRODUCTION, ...c }, countries: clone(countries), flows: clone(FLOWS), behaviour: { ...DEFAULT_BEHAVIOUR, ...b },
 });
 const onlyCountry = (code: number) => COUNTRIES_V11.map((c) => ({ ...c, weight: c.code === code ? 100 : 0 }));
 
 export const SCENARIOS: Scenario[] = [
   make("fifteen", "Fifteen years of arrivals", "The batch simulation: about eight landowners a year for fifteen years, every term run to its end.",
     { arrivalYears: 15, arrivalsPerYear: 7.5 }),
+  make("fill", "Until the land is full", "Landowners keep arriving until the last edition begins; then every term runs out and the programme ends. The edition thresholds are 1/500 of production's, so the land fills in a few decades.",
+    { fillLand: true }, COUNTRIES_V11, { editionScale: 2000 }),
   make("one", "One covenant, start to finish", "A single Sri Lanka request with nothing going wrong: claim, verification, power, deed, mint, sale and every re-verification of its term. Use Next action to step through it.",
     { maxRequests: 1, arrivalsPerYear: 365, cancelPct: 0, claimLapsePct: 0, abandonPct: 0, preMintChallengePct: 0, unsoldPct: 0,
       pathBLapseNothingPct: 0, pathBLapseUnattestedPct: 0, attestPct: 100, challengePct: 0, onTimePct: 100, littleLatePct: 0, blockPermille: 0,
@@ -183,6 +187,8 @@ export const SCENARIOS: Scenario[] = [
     { arrivalYears: 8, onTimePct: 40, littleLatePct: 30, attestPct: 25, challengePct: 5 }),
   make("pathb", "Path B lapses", "Brazil only: sales held in escrow until the recording is attested, with many recordings missing or unattested.",
     { arrivalYears: 6, pathBLapseNothingPct: 30, pathBLapseUnattestedPct: 30 }, onlyCountry(76)),
+  make("edition-race", "Edition race", "Edition thresholds 1/3,333 of production's and many landowners: editions move between verification and mint, stranding requests.",
+    { fillLand: true, arrivalsPerYear: 80 }, COUNTRIES_V11, { editionScale: 300 }),
   make("breaches", "Breaches and cancellations", "One verification in ten finds a breach; half the blocks end in cancellation, and term challenges find the land in breach.",
     { arrivalYears: 6, blockPermille: 100, cancelOfBlockPct: 50, termOutcomes: [20, 10, 10, 50, 5, 5] }),
   make("custom", "Custom", "Start from the defaults and set everything yourself.", {}),
@@ -190,7 +196,7 @@ export const SCENARIOS: Scenario[] = [
 
 export function cloneScenario(s: Scenario): Scenario {
   const c = clone(s);
-  toProduction(c);
+  c.behaviour = { ...DEFAULT_BEHAVIOUR, ...c.behaviour }; // a file saved before a setting existed takes its default
   return c;
 }
 
@@ -200,7 +206,13 @@ export function validate(s: Scenario): string[] {
   const c = s.contracts;
   if (c.verifierPermille + c.taxPermille >= 1000) e.push("The verifier's share and the platform tax must leave the guardian something.");
   if (c.serverPermille >= c.taxPermille) e.push("The server fee must be less than the platform tax.");
-  for (const k of LOCKED) if (c[k] !== PRODUCTION[k]) e.push(`${k} is fixed at its production value, ${PRODUCTION[k].toLocaleString("en-US")}.`);
+  if (c.yearDays < 2) e.push("The protocol year must be at least 2 days.");
+  if (c.reviewDays * 2 > c.yearDays) e.push("The review window must be shorter than half a year: a covenant re-verifies twice a year at 0.5 ha and above.");
+  if (c.maxVerificationDelayDays < c.reviewDays) e.push("The maximum verification delay must be at least the review window.");
+  if (c.haltAfter < 1) e.push("Releases halt after at least one unattested window.");
+  if (c.editionScale < 1) e.push("The edition scale must be at least 1.");
+  for (const k of ["acceptanceDays", "watchdogDays", "backstopDays", "minAuctionDays", "reviewDays", "responseDays", "panelDays", "redrawDays"] as const)
+    if (!(c[k] > 0)) e.push(`${k} must be more than 0 days.`);
   const codes = new Set<number>();
   for (const k of s.countries) {
     if (codes.has(k.code)) e.push(`Country ${k.code} appears twice.`);
@@ -209,8 +221,8 @@ export function validate(s: Scenario): string[] {
     if (k.minTerm < 3 || k.maxTerm > 100 || k.minTerm > k.maxTerm) e.push(`${k.name}: terms must run within 3-100 years, minimum first.`);
     if (!s.flows.some((f) => f.id === k.flowId)) e.push(`${k.name}: flow ${k.flowId} is not defined.`);
     const f = s.flows.find((x) => x.id === k.flowId);
-    if (k.listingDays !== LISTING_DAYS) e.push(`${k.name}: the listing window is fixed at ${LISTING_DAYS} days.`);
-    if (f && k.postSaleDays !== (recordsAfterSale(s.flows, k.flowId) ? POST_SALE_DAYS : 0)) e.push(`${k.name}: the post-sale window is fixed at ${recordsAfterSale(s.flows, k.flowId) ? POST_SALE_DAYS : 0} days for its flow.`);
+    if (!(k.listingDays > 0)) e.push(`${k.name}: the listing window must be more than 0 days.`);
+    if (f && recordsAfterSale(s.flows, k.flowId) && k.postSaleDays <= 0) e.push(`${k.name}: its flow records after the sale, so it needs a post-sale window.`);
     if (k.holders < 1 || k.orgsPerHolder < 1 || k.verifiersPerOrg < 1) e.push(`${k.name}: needs at least one Trust Admin, organisation and verifier.`);
   }
   if (!s.countries.some((k) => k.weight > 0)) e.push("At least one country must receive arrivals.");

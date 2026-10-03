@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- the desktop app's mark: a tree on a moss ground, inside the adaptive icon's 66 dp safe zone -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFFFFF" android:pathData="M54,30 L72,62 L36,62 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M50.5,62 L57.5,62 L57.5,76 L50.5,76 Z" />
+</vector>

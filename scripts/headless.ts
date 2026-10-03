@@ -5,14 +5,13 @@
 //   anvil --auto-impersonate --timestamp 1798761600 --port 8546 --gas-limit 100000000 --prune-history 64
 //   RPC=http://127.0.0.1:8546 SCENARIO=fill SEED=1 YEARS=60 npx tsx scripts/headless.ts
 //
-// SCENARIO is a scenario id from src/config.ts; RATE overrides its arrivals a year. The contracts run at production
-// settings: a CONFIG file with any other timing or edition scale is refused.
+// SCENARIO is a scenario id from src/config.ts; EDITION_SCALE and RATE override it.
 import { latestBlock, mineAt, logsBetween, prepareChain, timing } from "../src/chain";
 import { deploy } from "../src/deploy";
 import { Engine } from "../src/engine";
 import { Ledger, census, INVARIANTS } from "../src/ledger";
 import { DAY, setYear, setCountries, YEAR } from "../src/model";
-import { SCENARIOS, cloneScenario, validate, toProduction, FLOWS, type Scenario } from "../src/config";
+import { SCENARIOS, cloneScenario, validate, FLOWS, type Scenario } from "../src/config";
 import { nextStop } from "../src/travel";
 
 // CONFIG: a scenario file (the setup screen's "Save settings" writes one); else SCENARIO, a scenario id
@@ -20,9 +19,8 @@ const fs = await import("node:fs");
 const given: Scenario = process.env.CONFIG
   ? (((j) => j.scenario ?? j)(JSON.parse(fs.readFileSync(process.env.CONFIG, "utf8"))))
   : SCENARIOS.find((s) => s.id === (process.env.SCENARIO ?? "fifteen")) ?? SCENARIOS[0];
-const atProduction = toProduction(structuredClone(given));
-if (atProduction.length) { console.error(`The contracts run at production settings only; this configuration changes ${atProduction.join(", ")}.`); process.exit(1); }
 const sc = cloneScenario(given);
+if (process.env.EDITION_SCALE) sc.contracts.editionScale = Number(process.env.EDITION_SCALE);
 if (process.env.RATE) sc.behaviour.arrivalsPerYear = Number(process.env.RATE);
 const problems = validate(sc);
 if (problems.length) { console.error(problems.join("\n")); process.exit(1); }
@@ -71,6 +69,7 @@ for (let t = stepFrom(b.timestamp); t <= end && !e.finished; t = stepFrom(t)) {
   }
 }
 console.log(`\n${sc.name}, seed ${seed}: ${e.requests.length} requests, ${e.done.size} finished, finished=${e.finished}, ${e.actions} actions, ${checks} checks, ${new Date(b.timestamp * 1000).toISOString().slice(0, 10)}`);
+if (e.landFull) console.log(`land full in ${((e.landFullAt - e.start) / YEAR).toFixed(1)} years`);
 console.log(`invariant failures: ${fails.join(", ")}`);
 console.log(`anomalies: ${e.anomalies.length}`);
 const by: Record<string, number> = {};

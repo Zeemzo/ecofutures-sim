@@ -114,6 +114,10 @@ export class Engine {
   private added: Address = zeroAddress;
   private suspended = 0;
 
+  /** The last edition has begun: the land the editions schedule is taken, and arrivals stop. */
+  landFull = false;
+  landFullAt = 0;
+
   constructor(seed: number, scenario: Scenario) {
     this.rng = new Rng(seed);
     this.sc = scenario;
@@ -136,7 +140,7 @@ export class Engine {
 
   arrivalsOver(): boolean {
     if (this.b.maxRequests > 0 && this.requests.length >= this.b.maxRequests) return true;
-    return this.now >= this.start + this.b.arrivalYears * YEAR;
+    return this.b.fillLand ? this.landFull : this.now >= this.start + this.b.arrivalYears * YEAR;
   }
 
   rand(n: number) { return this.rng.next(n); }
@@ -333,6 +337,12 @@ export class Engine {
     this.volatile.clear();
     const mean = YEAR / Math.max(0.1, this.b.arrivalsPerYear);
     while (!this.arrivalsOver() && t >= this.nextArrival) {
+      if (this.b.fillLand && N(await read("tree", "currentEdition")) >= LAST_EDITION) {
+        this.landFull = true;
+        this.landFullAt = t;
+        this.note("land-full", 0, `Edition ${LAST_EDITION}, the last, has begun: the land the editions schedule is taken. No more landowners are admitted; the covenants already made run out their terms.`);
+        break;
+      }
       await this.arrival();
       this.nextArrival += Math.max(3600, Math.round(-Math.log(1 - this.rand(1_000_000) / 1_000_000) * mean));
     }

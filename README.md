@@ -1,9 +1,9 @@
 # EcoFutures V11 — simulator
 
-The whole V11 protocol on a local anvil chain. You choose what to investigate; the app deploys V11 at its
-production settings, admits the cast, and runs it. Landowners, verifiers, Trust Admins, patrons, the server and the
-Council act on their own; every transaction is real and every figure on screen is read from the chain. The calendar
-is the real one: the clock moves through it as fast as you choose, forward or back.
+The whole V11 protocol on a local anvil chain. You choose what to investigate and how the contracts are configured
+(production's settings unless you change them); the app deploys V11, admits the cast, and runs it. Landowners,
+verifiers, Trust Admins, patrons, the server and the Council act on their own; every transaction is real and every
+figure on screen is read from the chain. The clock moves as fast as you choose, forward or back.
 
 ## The desktop app (for anyone)
 
@@ -16,6 +16,7 @@ Download from [Releases](https://github.com/Zeemzo/ecofutures-sim/releases/lates
 | Windows (64-bit) | `EcoFutures.Simulator-1.1.0-win.zip` |
 | Linux (x64) | `EcoFutures.Simulator-1.1.0.AppImage`, or `ecofutures-simulator-1.1.0.tar.gz` |
 | Linux (ARM64) | `EcoFutures.Simulator-1.1.0-arm64.AppImage`, or `ecofutures-simulator-1.1.0-arm64.tar.gz` |
+| Android (phones and tablets, 64-bit, Android 8 or later) | `EcoFutures.Simulator-1.1.0-android.apk` |
 
 **Mac.** Open the disk image and drag the app to Applications. The app is not signed with an Apple Developer ID,
 so the first time macOS refuses to open it: open **System Settings → Privacy & Security**, scroll to the message
@@ -35,30 +36,39 @@ chmod +x EcoFutures.Simulator-1.1.0.AppImage
 If it asks for FUSE, install `libfuse2` (`libfuse2t64` on Ubuntu 24.04), or use the `.tar.gz`: unpack it and run
 `./ecofutures-simulator` inside.
 
+**Android.** Open the APK on the phone (download it there, or copy it over). Android asks once to allow installing
+apps from that source (the browser or the file manager): allow it, then **Install**. Play Protect may warn about an
+unknown developer: choose **Install anyway**. The app is signed for your own devices, not the Play Store. A run goes
+on while the app is in front: Android pauses a background app's network, its own chain included, so the screen stays
+on while the app is open.
+
 Each launch starts a fresh chain at 1 January 2027; quitting the app stops it.
 
 ## Setting up a run
 
-The contracts always run at their production settings: a 365-day protocol year, the 30-day review window, the
+Every run starts at the contracts' production settings: a 365-day protocol year, the 30-day review window, the
 14-day watchdog and backstop, 7 + 7 + 7-day challenges, three unattested windows to a halt, the production edition
-scale, and in every country a 330-day listing window (60 days after the sale on path B). None of these can be
-shortened; move through time instead (below).
+scale, and in every country a 330-day listing window (60 days after the sale on path B). Any of them can be
+changed: the screen shows production's value beside each one you change, and **Production settings** puts them all
+back.
 
 - **Scenario**: what to investigate. Each sets the actors' behaviour:
   - *Fifteen years of arrivals* — about eight landowners a year for fifteen years, every term run to its end.
+  - *Until the land is full* — landowners arrive until the last edition begins, then every term runs out. Its
+    edition thresholds are 1/500 of production's: at production's, the land needs tens of millions of covenants.
   - *One covenant, start to finish* — a single Sri Lanka request with nothing going wrong; use **Next action**.
   - *Challenge stress*, *Trust Admin failure*, *Late and absent verifiers*, *Path B lapses*,
-    *Breaches and cancellations*, and *Custom*.
+    *Edition race* (tiny edition thresholds, editions moving between verification and mint), *Breaches and
+    cancellations*, and *Custom*.
 - **Behaviour**: arrivals a year and for how long; the share of requests that cancel, lapse, are abandoned,
   challenged or go unsold; Path B lapses; how often review windows are attested or challenged; what panels find;
   how late verifiers are; blocks, cancellations, resales, payee switches; overcharge; the governance calendar.
-- **Contracts**: the timings, shown fixed; V and the fee split, which can be changed.
-- **Countries**: any country by ISO 3166 numeric code — its flow, term range and fees, and its cast: Trust
-  Admins, organisations each, verifiers per organisation, and its share of arrivals.
+- **Contracts**: every timing, the halt threshold, V, the fee split, and the edition scale.
+- **Countries**: any country by ISO 3166 numeric code — its flow, term range, listing and post-sale windows, its
+  fees, and its cast: Trust Admins, organisations each, verifiers per organisation, and its share of arrivals.
 
 The setup screen checks the configuration against the contracts' own rules before it deploys. Settings are
-remembered between launches and can be saved to and loaded from a file; a file with other timings is put back to
-production, and the screen says what changed. **Reset** returns the chain to empty.
+remembered between launches and can be saved to and loaded from a file. **Reset** returns the chain to empty.
 
 ## Watching it
 
@@ -90,6 +100,7 @@ npm run app                    # the desktop app from source (needs resources/bi
 npm run dist:mac               # release/*.dmg  (Apple silicon and Intel)
 npm run dist:win               # release/*-win.zip
 npm run dist:linux             # release/*.AppImage and *.tar.gz (x64 and ARM64)
+npm run dist:android           # release/*-android.apk (needs the Android SDK with an NDK, and JDK 17)
 ```
 
 The contracts' ABIs, bytecode and explorer map are committed in `src/abi.json`, `src/bytecode.json` and
@@ -126,5 +137,6 @@ python3 sim/build_matrix.py                                                     
 | `src/main.ts` | the clock loop, travel in time, the board, the charts, the wallets, the drawer |
 | `src/explorer.ts` | the Contracts tab |
 | `electron/` | the desktop app: starts its own anvil, opens the built app against it |
+| `android/` | the Android app: the same, in a WebView, with anvil's static Linux build and a launcher for it |
 | `scripts/audit.ts` | audits any run from the chain alone against the protocol's rules |
 | `sim/` | analysis of the runs the scripts write to `sim/out/` |

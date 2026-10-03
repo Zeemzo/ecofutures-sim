@@ -1,7 +1,7 @@
 // The setup screen: choose a scenario, adjust how the actors behave, how the contracts are configured, and which
 // countries take part. Returns the scenario and seed to run.
-import { SCENARIOS, FLOWS, KNOWN_COUNTRIES, PRODUCTION, LOCKED, LISTING_DAYS, cloneScenario, toProduction, validate, type Scenario, type CountryConfig } from "./config";
-import { StepName, OutcomeName } from "./model";
+import { SCENARIOS, FLOWS, KNOWN_COUNTRIES, PRODUCTION, LISTING_DAYS, POST_SALE_DAYS, cloneScenario, toProduction, validate, type Scenario, type CountryConfig } from "./config";
+import { Step, StepName, OutcomeName } from "./model";
 import surface from "./surface.json";
 
 /** Every country, ISO 3166-1: [numeric code, two letters, name]. */
@@ -13,7 +13,8 @@ type Group = { title: string; note?: string; fields: Field[] };
 const BEHAVIOUR: Group[] = [
   { title: "The run", fields: [
     { path: "behaviour.arrivalsPerYear", label: "Landowners a year", min: 0.1, max: 2000, step: 0.5 },
-    { path: "behaviour.arrivalYears", label: "Years of arrivals", unit: "years", min: 0, max: 200 },
+    { path: "behaviour.fillLand", label: "Run until the land is full (the last edition begins)", kind: "check" },
+    { path: "behaviour.arrivalYears", label: "Otherwise, years of arrivals", unit: "years", min: 0, max: 200 },
     { path: "behaviour.maxRequests", label: "At most this many requests (0 = no limit)", min: 0, max: 100000 },
     { path: "behaviour.maxTermYears", label: "Longest term a landowner asks for", unit: "years", min: 3, max: 100 },
     { path: "behaviour.governanceCalendar", label: "The governance calendar: a new Trust Admin, a freeze, a removal and replacement, a law change, a suspension, a fee change, a Council rotation", kind: "check" },
@@ -43,18 +44,18 @@ const BEHAVIOUR: Group[] = [
 ];
 
 const CONTRACTS: Group[] = [
-  { title: "Time", note: "Fixed at production. The chain runs on the real calendar; move through it with the time controls instead.", fields: [
-    { path: "contracts.yearDays", label: "Protocol year", unit: "days" },
-    { path: "contracts.acceptanceDays", label: "A claiming verifier submits within", unit: "days" },
-    { path: "contracts.watchdogDays", label: "Watchdog window after a verification", unit: "days" },
-    { path: "contracts.backstopDays", label: "Backstop delay before a GTA may attest", unit: "days" },
-    { path: "contracts.minAuctionDays", label: "Shortest auction", unit: "days" },
-    { path: "contracts.reviewDays", label: "Review window after a re-verification", unit: "days" },
-    { path: "contracts.maxVerificationDelayDays", label: "A verifier this late can be replaced", unit: "days" },
-    { path: "contracts.responseDays", label: "Challenge: response", unit: "days" },
-    { path: "contracts.panelDays", label: "Challenge: panel", unit: "days" },
-    { path: "contracts.redrawDays", label: "Challenge: redraw", unit: "days" },
-    { path: "contracts.haltAfter", label: "Unattested windows in a row that halt releases" },
+  { title: "Time", note: "In days. Production's value is shown beside any you change; Production settings puts them all back.", fields: [
+    { path: "contracts.yearDays", label: "Protocol year", unit: "days", min: 2, step: 1 },
+    { path: "contracts.acceptanceDays", label: "A claiming verifier submits within", unit: "days", min: 1 },
+    { path: "contracts.watchdogDays", label: "Watchdog window after a verification", unit: "days", min: 1 },
+    { path: "contracts.backstopDays", label: "Backstop delay before a GTA may attest", unit: "days", min: 1 },
+    { path: "contracts.minAuctionDays", label: "Shortest auction", unit: "days", min: 1 },
+    { path: "contracts.reviewDays", label: "Review window after a re-verification", unit: "days", min: 1 },
+    { path: "contracts.maxVerificationDelayDays", label: "A verifier this late can be replaced", unit: "days", min: 1 },
+    { path: "contracts.responseDays", label: "Challenge: response", unit: "days", min: 1 },
+    { path: "contracts.panelDays", label: "Challenge: panel", unit: "days", min: 1 },
+    { path: "contracts.redrawDays", label: "Challenge: redraw", unit: "days", min: 1 },
+    { path: "contracts.haltAfter", label: "Unattested windows in a row that halt releases", min: 1, max: 100 },
   ] },
   { title: "Money", fields: [
     { path: "contracts.baseFee", label: "V, the default base fee", unit: "USDT", min: 1 },
@@ -62,15 +63,15 @@ const CONTRACTS: Group[] = [
     { path: "contracts.taxPermille", label: "Platform tax: server + Trust Admin + review pool", unit: "per 1,000", max: 999 },
     { path: "contracts.serverPermille", label: "Of which the server", unit: "per 1,000", max: 999 },
   ] },
-  { title: "TR3 editions", note: "Fixed at production: land-years per F² in each edition's threshold.", fields: [
-    { path: "contracts.editionScale", label: "Edition scale" },
+  { title: "TR3 editions", note: "Land-years per F² in each edition's threshold: 1,000,000 in production, where the land needs tens of millions of covenants to reach the last edition. Smaller moves the editions sooner.", fields: [
+    { path: "contracts.editionScale", label: "Edition scale", min: 1 },
   ] },
 ];
 
 const COUNTRY_COLS: { key: keyof CountryConfig; label: string; w?: string; min?: number; max?: number }[] = [
   { key: "code", label: "ISO", w: "64px", min: 1, max: 999 }, { key: "name", label: "Name", w: "120px" }, { key: "short", label: "Code", w: "48px" },
   { key: "flowId", label: "Flow", w: "170px" }, { key: "minTerm", label: "Min term", min: 3, max: 100 }, { key: "maxTerm", label: "Max term", min: 3, max: 100 },
-  { key: "listingDays", label: "Listing days" }, { key: "postSaleDays", label: "Post-sale days" },
+  { key: "listingDays", label: "Listing days", min: 1 }, { key: "postSaleDays", label: "Post-sale days", min: 0 },
   { key: "baseFee", label: "V (0 = default)", min: 0 }, { key: "attestationFee", label: "Attestation fee", min: 0 }, { key: "judgmentFee", label: "Judgment fee", min: 0 },
   { key: "holders", label: "Trust Admins", min: 1, max: 9 }, { key: "orgsPerHolder", label: "Orgs each", min: 1, max: 9 },
   { key: "verifiersPerOrg", label: "Verifiers per org", min: 1, max: 4 }, { key: "weight", label: "Share of arrivals", min: 0 },
@@ -91,8 +92,8 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
   let saved: { scenario: Scenario; seed: number } | null = null;
   try { saved = JSON.parse(localStorage.getItem(STORE) ?? "null"); } catch {}
   let sc: Scenario = saved?.scenario ? saved.scenario : cloneScenario(SCENARIOS[0]);
-  // settings remembered from an earlier version may carry other timings: the run is at production's
-  let notice = saved?.scenario && toProduction(sc).length ? "Your saved settings had non-production timings; they are back at production values." : "";
+  if (saved?.scenario) sc = cloneScenario(sc); // settings saved by an earlier version take defaults for what is new
+  let notice = "";
   let seed = saved?.seed ?? 20270101;
   let tab = "behaviour";
 
@@ -101,9 +102,6 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
   function fieldHtml(f: Field): string {
     const v = get(sc, f.path);
     const base = f.path.startsWith("contracts.") ? get({ contracts: PRODUCTION }, f.path) : undefined;
-    if (LOCKED.includes(f.path.replace("contracts.", "") as any)) {
-      return `<div class="f"><span>${esc(f.label)}</span><span class="in fixed"><b>${Number(v).toLocaleString("en-US")}</b>${f.unit ? `<small>${esc(f.unit)}</small>` : ""}</span></div>`;
-    }
     if (f.kind === "check") {
       return `<label class="f check-f"><input type="checkbox" data-path="${f.path}" ${v ? "checked" : ""}><span>${esc(f.label)}</span></label>`;
     }
@@ -125,7 +123,6 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
     const rows = sc.countries.map((c, i) => `<tr>${COUNTRY_COLS.map((col) => {
       const v = c[col.key];
       if (col.key === "flowId") return `<td><select data-country="${i}" data-key="flowId">${flowOpts(c.flowId)}</select></td>`;
-      if (col.key === "listingDays" || col.key === "postSaleDays") return `<td class="fixed" title="${col.key === "listingDays" ? `Fixed: ${LISTING_DAYS} days in every country` : "Fixed by the flow: path B countries have a post-sale window"}">${v}</td>`;
       if (col.key === "name" || col.key === "short") return `<td><input type="text" data-country="${i}" data-key="${col.key}" value="${esc(String(v))}" style="width:${col.w}"></td>`;
       return `<td><input type="number" data-country="${i}" data-key="${col.key}" value="${v}" min="${col.min ?? 0}" ${col.max ? `max="${col.max}"` : ""} style="width:${col.w ?? "72px"}"></td>`;
     }).join("")}<td><button type="button" class="ghost" data-remove="${i}" aria-label="Remove ${esc(c.name)}">Remove</button></td></tr>`).join("");
@@ -144,7 +141,7 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
     const body = tab === "behaviour" ? groups(BEHAVIOUR) + outcomes() : tab === "contracts" ? groups(CONTRACTS) : countries();
     root.innerHTML = `<div class="setup-wrap">
       <header class="setup-head"><span class="eyebrow">EcoFutures V11 · simulator</span><h1>Set up a run</h1>
-        <p class="muted">The real contracts on a local chain, at production settings and on the real calendar. Choose what to investigate, adjust how the actors behave, the fees and the countries, and the app deploys V11, admits the cast, and runs it. ${esc(status)}</p>${notice ? `<p class="notice">${esc(notice)}</p>` : ""}</header>
+        <p class="muted">The real contracts on a local chain. Choose what to investigate and adjust anything: the actors, the contracts' settings (production unless you change them) and the countries. The app deploys V11 with your configuration, admits the cast, and runs it. ${esc(status)}</p>${notice ? `<p class="notice">${esc(notice)}</p>` : ""}</header>
       <div class="setup-grid">
         <nav class="scenarios" aria-label="Scenarios">${cards}</nav>
         <section class="config">
@@ -156,6 +153,7 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
         ${errs.length ? `<ul class="errs">${errs.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>` : `<span class="ok-msg">The configuration is valid.</span>`}
         <div class="row"><label for="seed">Seed</label><input id="seed" type="number" value="${seed}">
           <button type="button" id="resetScenario" class="ghost">Restore this scenario's defaults</button>
+          <button type="button" id="toProduction" class="ghost" title="Every timing, the edition scale and each country's listing (${LISTING_DAYS} days) and post-sale (${POST_SALE_DAYS} days on path B) windows at production">Production settings</button>
           <button type="button" id="exportCfg" class="ghost">Save settings</button>
           <label class="ghost file">Load settings<input type="file" id="importCfg" accept="application/json" hidden></label>
           <button type="button" id="start" class="primary" ${errs.length ? "disabled" : ""}>Deploy and set up</button></div>
@@ -178,6 +176,12 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
       const [name, short] = KNOWN_COUNTRIES[code] ?? (iso ? [iso[2], iso[1]] : [`Country ${code}`, `C${code}`.slice(0, 3)]);
       sc.countries.push({ code, name, short, flowId: 2, minTerm: 3, maxTerm: 100, listingDays: 330, postSaleDays: 0, baseFee: 0,
         attestationFee: 5, judgmentFee: 9, holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 20 });
+      persist(); render();
+      return;
+    }
+    if (el.id === "toProduction") {
+      const changed = toProduction(sc);
+      notice = changed.length ? `Back at production: ${changed.join("; ")}.` : "Every setting is already at production.";
       persist(); render();
       return;
     }
@@ -206,9 +210,8 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
         try {
           const j = JSON.parse(txt);
           if (j.scenario?.contracts && j.scenario?.behaviour && j.scenario?.countries) {
-            sc = j.scenario; seed = j.seed ?? seed;
-            const changed = toProduction(sc);
-            notice = changed.length ? `The file's non-production settings were put back to production: ${changed.join("; ")}.` : "";
+            sc = cloneScenario(j.scenario); seed = j.seed ?? seed;
+            notice = "";
             persist(); render();
           }
         } catch {}
@@ -223,7 +226,12 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
       const c = sc.countries[Number(el.dataset.country)] as any;
       const k = el.dataset.key!;
       c[k] = k === "name" || k === "short" ? el.value : Number(el.value);
-      if (k === "flowId") { toProduction(sc); persist(); render(); return; }
+      // a flow that records after the sale needs a post-sale window: give it production's when it has none
+      if (k === "flowId") {
+        const f = sc.flows.find((x) => x.id === c.flowId);
+        if (f && f.steps.includes(Step.RECORDING) && !(c.postSaleDays > 0)) c.postSaleDays = POST_SALE_DAYS;
+        persist(); render(); return;
+      }
     } else return;
     persist();
     // re-render without losing focus: only the footer's validation changes
