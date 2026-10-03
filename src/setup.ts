@@ -1,6 +1,6 @@
 // The setup screen: choose a scenario, adjust how the actors behave, how the contracts are configured, and which
 // countries take part. Returns the scenario and seed to run.
-import { SCENARIOS, FLOWS, KNOWN_COUNTRIES, PRODUCTION, LISTING_DAYS, POST_SALE_DAYS, cloneScenario, toProduction, validate, type Scenario, type CountryConfig } from "./config";
+import { SCENARIOS, FLOWS, KNOWN_COUNTRIES, PRODUCTION, LISTING_DAYS, POST_SALE_DAYS, MAX_FLOW_STEPS, cloneScenario, toProduction, validate, validateFlow, recordsAfterSale, type Scenario, type CountryConfig } from "./config";
 import { Step, StepName, OutcomeName } from "./model";
 import surface from "./surface.json";
 
@@ -45,7 +45,7 @@ const BEHAVIOUR: Group[] = [
 
 const CONTRACTS: Group[] = [
   { title: "Time", note: "In days. Production's value is shown beside any you change; Production settings puts them all back.", fields: [
-    { path: "contracts.yearDays", label: "Protocol year", unit: "days", min: 2, step: 1 },
+    { path: "contracts.yearDays", label: "Protocol year (365.25 for the calendar's average)", unit: "days", min: 2, step: 0.25 },
     { path: "contracts.acceptanceDays", label: "A claiming verifier submits within", unit: "days", min: 1 },
     { path: "contracts.watchdogDays", label: "Watchdog window after a verification", unit: "days", min: 1 },
     { path: "contracts.backstopDays", label: "Backstop delay before a GTA may attest", unit: "days", min: 1 },
@@ -128,13 +128,31 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
       if (col.key === "name" || col.key === "short") return td(`<input type="text" data-country="${i}" data-key="${col.key}" value="${esc(String(v))}" style="width:${col.w}" aria-label="${esc(c.name)}: ${esc(col.label)}">`, col.key === "name" ? "wide" : "");
       return td(`<input type="number" data-country="${i}" data-key="${col.key}" value="${v}" min="${col.min ?? 0}" ${col.max ? `max="${col.max}"` : ""} style="width:${col.w ?? "72px"}" aria-label="${esc(c.name)}: ${esc(col.label)}">`);
     }).join("")}<td class="act"><button type="button" class="ghost" data-remove="${i}" aria-label="Remove ${esc(c.name)}">Remove</button></td></tr>`).join("");
-    const flows = sc.flows.map((f) => `<li><b>${f.id}. ${esc(f.name)}</b>: ${f.steps.map((s) => esc(StepName[s])).join(" → ")}</li>`).join("");
+    // the flows: each a sequence of steps, edited here and checked against the contracts' own rules
+    const stepOpts = (sel: number) => StepName.map((n, k) => (k === 0 ? "" : `<option value="${k}" ${k === sel ? "selected" : ""}>${esc(n[0].toUpperCase() + n.slice(1))}</option>`)).join("");
+    const flows = sc.flows.map((f, i) => {
+      const used = sc.countries.filter((c) => c.flowId === f.id).map((c) => c.name);
+      const errs = validateFlow(f.steps);
+      const steps = f.steps.map((st, j) => `<li><select data-flow="${i}" data-step="${j}" aria-label="Flow ${f.id}, step ${j + 1}">${stepOpts(st)}</select>
+        <button type="button" class="ghost icon" data-step-up="${i}:${j}" ${j === 0 ? "disabled" : ""} aria-label="Move step ${j + 1} earlier">↑</button>
+        <button type="button" class="ghost icon" data-step-del="${i}:${j}" aria-label="Remove step ${j + 1}">×</button></li>`).join("");
+      return `<div class="flow-ed${errs.length ? " bad" : ""}">
+        <div class="flow-head"><b>${f.id}.</b><input type="text" data-flow-name="${i}" value="${esc(f.name)}" aria-label="Flow ${f.id}: name">
+          <button type="button" class="ghost" data-flow-del="${i}" ${used.length ? `disabled title="Used by ${esc(used.join(", "))}"` : ""}>Remove</button></div>
+        <ol class="steps">${steps}</ol>
+        <div class="row"><button type="button" class="ghost" data-step-add="${i}" ${f.steps.length >= MAX_FLOW_STEPS ? "disabled" : ""}>Add a step</button>
+          <span class="small muted">${used.length ? `Used by ${esc(used.join(", "))}` : "Not used by any country"}${recordsAfterSale(sc.flows, f.id) ? " · steps after the sale: the price waits in escrow" : ""}</span></div>
+        ${errs.length ? `<ul class="errs">${errs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+      </div>`;
+    }).join("");
     return `<fieldset><legend>Countries</legend><p class="note">Each country's legal settings, its fees, and its cast: Trust Admins, their organisations, and verifiers in each. The contracts allow at most 10 Trust Admins a country and 5 verifiers an organisation; the limits here leave room for the governance calendar and for recruits.</p>
       <div class="table countries"><table><thead><tr>${COUNTRY_COLS.map((c) => `<th>${esc(c.label)}</th>`).join("")}<th></th></tr></thead><tbody>${rows}</tbody></table></div>
       <div class="add"><label for="newCode">Add a country</label><select id="newCode"><option value="">Choose from all ${ALL_COUNTRIES.length} countries…</option>${ALL_COUNTRIES
         .filter(([n]) => !sc.countries.some((c) => c.code === n))
         .map(([n, a2, name]) => `<option value="${n}">${esc(name)} (${a2}, ${String(n).padStart(3, "0")})</option>`).join("")}</select><button type="button" id="addCountry">Add</button></div>
-      <h4>Flows</h4><ul class="flows">${flows}</ul></fieldset>`;
+      <h4>Flows</h4><p class="note">The steps a request goes through between the verification and the term. The contracts check every flow when it is defined: a document (agreement, deed or recording) is followed by its attestation, the mint by the sale, an agreement comes before the mint and a recording after the sale, and a power is registered before anything it signs.</p>
+      <div class="flows-ed">${flows}</div>
+      <div class="add"><button type="button" id="addFlow">Add a flow</button></div></fieldset>`;
   }
 
   function render() {
@@ -181,6 +199,18 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
       persist(); render();
       return;
     }
+    const flowAt = (attr: string) => { const v = el.closest<HTMLElement>(`[${attr}]`)?.getAttribute(attr); return v === null || v === undefined ? null : v.split(":").map(Number); };
+    let fa: number[] | null;
+    if ((fa = flowAt("data-step-up"))) { const [i, j] = fa; const st = sc.flows[i].steps; [st[j - 1], st[j]] = [st[j], st[j - 1]]; persist(); render(); return; }
+    if ((fa = flowAt("data-step-del"))) { const [i, j] = fa; sc.flows[i].steps.splice(j, 1); persist(); render(); return; }
+    if ((fa = flowAt("data-step-add"))) { sc.flows[fa[0]].steps.push(Step.ATTEST); persist(); render(); return; }
+    if ((fa = flowAt("data-flow-del"))) { sc.flows.splice(fa[0], 1); persist(); render(); return; }
+    if (el.id === "addFlow") {
+      const id = Math.max(0, ...sc.flows.map((f) => f.id)) + 1;
+      sc.flows.push({ id, name: `Flow ${id}`, steps: [Step.DEED, Step.ATTEST, Step.MINT, Step.SALE] });
+      persist(); render();
+      return;
+    }
     if (el.id === "toProduction") {
       const changed = toProduction(sc);
       notice = changed.length ? `Back at production: ${changed.join("; ")}.` : "Every setting is already at production.";
@@ -221,6 +251,11 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
       return;
     }
     if (el.id === "seed") { seed = Number(el.value) || 1; persist(); return; }
+    if (el.dataset.flowName !== undefined) { sc.flows[Number(el.dataset.flowName)].name = el.value; persist(); render(); return; }
+    if (el.dataset.flow !== undefined && el.dataset.step !== undefined) {
+      sc.flows[Number(el.dataset.flow)].steps[Number(el.dataset.step)] = Number(el.value);
+      persist(); render(); return;
+    }
     if (el.dataset.path) {
       const isCheck = (el as HTMLInputElement).type === "checkbox";
       set(sc, el.dataset.path, isCheck ? (el as HTMLInputElement).checked : Number(el.value));
@@ -230,8 +265,7 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
       c[k] = k === "name" || k === "short" ? el.value : Number(el.value);
       // a flow that records after the sale needs a post-sale window: give it production's when it has none
       if (k === "flowId") {
-        const f = sc.flows.find((x) => x.id === c.flowId);
-        if (f && f.steps.includes(Step.RECORDING) && !(c.postSaleDays > 0)) c.postSaleDays = POST_SALE_DAYS;
+        if (recordsAfterSale(sc.flows, c.flowId) && !(c.postSaleDays > 0)) c.postSaleDays = POST_SALE_DAYS;
         persist(); render(); return;
       }
     } else return;

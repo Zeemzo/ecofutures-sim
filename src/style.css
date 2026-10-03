@@ -314,6 +314,18 @@ td.fixed { font-family: var(--mono); color: var(--muted); text-align: right; pad
   .setup-foot .row button, .setup-foot .row .file { flex: 1 1 auto; }
 }
 .add input { width: 110px; }
+.flows-ed { display: grid; gap: 10px; }
+.flow-ed { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 8px; background: var(--surface-2); min-width: 0; }
+.flow-ed.bad { border-color: var(--rust); }
+.flow-head { display: flex; gap: 8px; align-items: center; }
+.flow-head input { flex: 1 1 auto; min-width: 0; }
+.flow-ed .steps { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px 10px; counter-reset: step; }
+.flow-ed .steps li { display: flex; gap: 4px; align-items: center; font-size: 12px; color: var(--muted); }
+.flow-ed .steps li::before { counter-increment: step; content: counter(step); min-width: 1.4em; text-align: right; font-family: var(--mono); }
+.flow-ed .steps select { font-size: 12.5px; padding: 5px 6px; }
+.flow-ed .row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.flow-ed .errs { margin: 0; }
+button.icon { padding: 4px 8px; line-height: 1; }
 .flows { margin: 4px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); display: grid; gap: 3px; }
 .setup-foot { display: grid; gap: 10px; position: sticky; bottom: 0; background: var(--ground); padding: 12px 0; border-top: 1px solid var(--line); }
 .errs { margin: 0; padding-left: 18px; color: var(--rust); font-size: 13px; }

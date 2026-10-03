@@ -66,6 +66,11 @@ back.
 - **Contracts**: every timing, the halt threshold, V, the fee split, and the edition scale.
 - **Countries**: any country by ISO 3166 numeric code — its flow, term range, listing and post-sale windows, its
   fees, and its cast: Trust Admins, organisations each, verifiers per organisation, and its share of arrivals.
+- **Flows**: the three V11 flows, changed or added to: any sequence of power, registering the power, agreement,
+  deed, recording, attestation, mint and sale the contracts accept. The screen checks each against the contracts'
+  rules (a document followed by its attestation, the mint by the sale, an agreement before the mint, a recording
+  after the sale, a power registered before anything it signs) and says which one a flow breaks.
+- The protocol year can be 365.25 days, the calendar's average, rather than production's 365.
 
 The setup screen checks the configuration against the contracts' own rules before it deploys. Settings are
 remembered between launches and can be saved to and loaded from a file. **Reset** returns the chain to empty.

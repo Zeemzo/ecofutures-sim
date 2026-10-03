@@ -530,7 +530,8 @@ export class Engine {
       await this.act(r.verifier, "deeds", "anchorPower", [BigInt(rid), h("reg", rid), "RG"], "anchorPower", rid);
     } else if (step === Step.DEED || step === Step.AGREEMENT) {
       const by = this.rand(2) === 0 || !holderCan ? r.verifier : holder;
-      await this.act(by, "deeds", "recordDocument", [BigInt(rid), h("deed", rid), BigInt(t), `${this.shortOf(N(r.country))}-REG`], "recordDeed", rid);
+      // each document its own: a flow may record several (an agreement, then a deed)
+      await this.act(by, "deeds", "recordDocument", [BigInt(rid), h(step === Step.AGREEMENT ? "agreement" : "deed", rid, N(s.cursor)), BigInt(t), `${this.shortOf(N(r.country))}-REG`], "recordDeed", rid);
     } else if (step === Step.RECORDING) {
       const saleAt = N(r.saleAt), post = N(r.postSaleWindow);
       if (t > saleAt + post) {

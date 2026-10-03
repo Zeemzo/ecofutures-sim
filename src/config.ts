@@ -112,7 +112,56 @@ export const LISTING_DAYS = 330;
 /** A path B country's post-sale window: no document sets it yet. */
 export const POST_SALE_DAYS = 60;
 
-const recordsAfterSale = (flows: FlowDef[], flowId: number) => flows.find((f) => f.id === flowId)?.steps.includes(Step.RECORDING) ?? false;
+/** A flow with steps after the sale holds the price in escrow until they are done: its country needs a post-sale window. */
+export const recordsAfterSale = (flows: FlowDef[], flowId: number) => {
+  const f = flows.find((x) => x.id === flowId);
+  return !!f && f.steps.indexOf(Step.SALE) >= 0 && f.steps.indexOf(Step.SALE) < f.steps.length - 1;
+};
+
+/** The longest flow the contracts store (FlowCode.MAX_STEPS). */
+export const MAX_FLOW_STEPS = 16;
+
+/** The contracts' rules for a flow (EcoCountries._validateFlow), each broken one as a sentence. */
+export function validateFlow(steps: number[]): string[] {
+  const e: string[] = [];
+  const name = (s: number) => ["", "the power", "the power's registration", "an agreement", "a deed", "a recording", "an attestation", "the mint", "the sale"][s] ?? `step ${s}`;
+  if (steps.length < 4 || steps.length > MAX_FLOW_STEPS) e.push(`It has ${steps.length} steps; a flow has 4 to ${MAX_FLOW_STEPS}.`);
+  let power = -1, mint = -1, anchored = false, deed = false;
+  steps.forEach((st, i) => {
+    const beforeMint = mint < 0;
+    const next = steps[i + 1], prev = steps[i - 1];
+    if (st === Step.MINT) {
+      if (!beforeMint) e.push("It mints twice.");
+      if (next !== Step.SALE) e.push("The mint must be followed at once by the sale.");
+      if (power >= 0 && !anchored) e.push("The power must be registered before the mint.");
+      mint = i;
+    } else if (st === Step.SALE) {
+      if (prev !== Step.MINT) e.push("The sale must come straight after the mint.");
+    } else if (st === Step.POWER) {
+      if (power >= 0) e.push("It grants the power twice.");
+      if (!beforeMint) e.push("The power must come before the mint.");
+      power = i;
+    } else if (st === Step.POWER_ANCHOR) {
+      if (power < 0) e.push("The power's registration needs the power before it.");
+      else if (anchored) e.push("It registers the power twice.");
+      if (!beforeMint) e.push("The power must be registered before the mint.");
+      anchored = true;
+    } else if (st === Step.ATTEST) {
+      if (prev !== Step.AGREEMENT && prev !== Step.DEED && prev !== Step.RECORDING) e.push(`Attestation ${i + 1} attests nothing: it must follow an agreement, a deed or a recording.`);
+    } else if (st === Step.AGREEMENT || st === Step.DEED || st === Step.RECORDING) {
+      if (next !== Step.ATTEST) e.push(`${name(st)[0].toUpperCase()}${name(st).slice(1)} (step ${i + 1}) must be followed at once by an attestation.`);
+      if (power >= 0 && !anchored) e.push("The power must be registered before any document.");
+      if (st === Step.AGREEMENT && !beforeMint) e.push("An agreement must come before the mint.");
+      if (st === Step.RECORDING && beforeMint) e.push("A recording comes after the sale; before the mint, use a deed.");
+      if (st !== Step.AGREEMENT) deed = true;
+    } else e.push(`Step ${i + 1} is not a step.`);
+  });
+  if (mint < 0) e.push("It never mints: a flow needs the mint, then the sale.");
+  if (!deed) e.push("It records no deed or recording: the covenant needs one.");
+  const last = steps[steps.length - 1];
+  if (steps.length && last !== Step.SALE && last !== Step.ATTEST) e.push("It must end with the sale or an attestation.");
+  return [...new Set(e)];
+}
 
 /** Puts every timing, the edition scale and each country's windows back at production; returns what it changed. */
 export function toProduction(s: Scenario): string[] {
@@ -207,12 +256,20 @@ export function validate(s: Scenario): string[] {
   if (c.verifierPermille + c.taxPermille >= 1000) e.push("The verifier's share and the platform tax must leave the guardian something.");
   if (c.serverPermille >= c.taxPermille) e.push("The server fee must be less than the platform tax.");
   if (c.yearDays < 2) e.push("The protocol year must be at least 2 days.");
+  if (Math.abs(c.yearDays * 86400 - Math.round(c.yearDays * 86400)) > 1e-6) e.push("The protocol year must be a whole number of seconds (365.25 days is; 365.3 is not).");
   if (c.reviewDays * 2 > c.yearDays) e.push("The review window must be shorter than half a year: a covenant re-verifies twice a year at 0.5 ha and above.");
   if (c.maxVerificationDelayDays < c.reviewDays) e.push("The maximum verification delay must be at least the review window.");
   if (c.haltAfter < 1) e.push("Releases halt after at least one unattested window.");
   if (c.editionScale < 1) e.push("The edition scale must be at least 1.");
   for (const k of ["acceptanceDays", "watchdogDays", "backstopDays", "minAuctionDays", "reviewDays", "responseDays", "panelDays", "redrawDays"] as const)
     if (!(c[k] > 0)) e.push(`${k} must be more than 0 days.`);
+  const ids = new Set<number>();
+  for (const f of s.flows) {
+    if (ids.has(f.id)) e.push(`Flow ${f.id} appears twice.`);
+    ids.add(f.id);
+    if (!(f.id >= 1 && f.id <= 255)) e.push(`Flow ${f.id}: its number must be 1-255.`);
+    for (const x of validateFlow(f.steps)) e.push(`Flow ${f.id} (${f.name}): ${x}`);
+  }
   const codes = new Set<number>();
   for (const k of s.countries) {
     if (codes.has(k.code)) e.push(`Country ${k.code} appears twice.`);

@@ -31,7 +31,7 @@ export async function deploy(s: Scenario, progress: (msg: string) => void = () =
   const countries = await proxy("countries", forwarder, "initialize", [admin, BigInt(k.baseFee) * E18]);
   const registry = await proxy("registry", forwarder, "initialize", [admin, usdt, BigInt(k.acceptanceDays) * DAY, BigInt(k.watchdogDays) * DAY]);
   const deeds = await proxy("deeds", forwarder, "initialize", [admin, BigInt(k.backstopDays) * DAY]);
-  const core = await proxy("core", forwarder, "initialize", [admin, BigInt(k.yearDays) * DAY, BigInt(k.maxVerificationDelayDays) * DAY]);
+  const core = await proxy("core", forwarder, "initialize", [admin, BigInt(Math.round(k.yearDays * Number(DAY))), BigInt(k.maxVerificationDelayDays) * DAY]);
   const bank = await proxy("bank", forwarder, "initialize", [admin, usdt, serverWallet, k.verifierPermille, k.taxPermille, k.serverPermille, BigInt(k.minAuctionDays) * DAY]);
   const challenge = await proxy("challenge", forwarder, "initialize", [admin, usdt, BigInt(k.reviewDays) * DAY, BigInt(k.responseDays) * DAY, BigInt(k.panelDays) * DAY, BigInt(k.redrawDays) * DAY, k.haltAfter]);
   const governance = await proxy("governance", forwarder, "initialize", [admin]);
