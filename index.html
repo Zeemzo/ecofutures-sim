@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EcoFutures Live</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232d7a57'/%3E%3Cpath d='M16 6 L24 20 H8 Z M14.5 20 h3 v6 h-3 Z' fill='white'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">
+      <span class="eyebrow">EcoFutures V11 · local chain</span>
+      <div class="views" role="tablist" aria-label="View"><button type="button" role="tab" aria-selected="true" data-view="sim">Simulation</button><button type="button" role="tab" aria-selected="false" data-view="explorer">Contracts</button></div>
+    </div>
+    <div class="clock" aria-live="off">
+      <span class="clock-date" id="clockDate">—</span>
+      <span class="clock-sub" id="clockSub">Setting up</span>
+    </div>
+    <div class="controls" role="group" aria-label="Clock">
+      <button id="play" class="primary" type="button" disabled>Play</button>
+      <div class="speeds" id="speeds" role="radiogroup" aria-label="Speed"></div>
+      <button id="skip" type="button" disabled title="Move the clock to the next moment anyone has something to do">Next action</button>
+      <div class="travel" role="group" aria-label="Travel in time">
+        <button id="tBackY" type="button" disabled title="Back one year: the chain and the actors return to a checkpoint, then relive the days to the date">−1 yr</button>
+        <button id="tBackM" type="button" disabled title="Back one month">−1 mo</button>
+        <input id="tDate" type="date" disabled aria-label="Date to travel to">
+        <button id="tGo" type="button" disabled title="Travel to this date, forward or back">Go</button>
+        <button id="tFwdM" type="button" disabled title="Forward one month: the actors live every day of it">+1 mo</button>
+        <button id="tFwdY" type="button" disabled title="Forward one year">+1 yr</button>
+      </div>
+      <button id="reset" type="button" disabled>Reset</button>
+    </div>
+  </header>
+
+  <div class="strip" id="strip" data-sim>
+    <span><b id="sBlock">0</b> blocks</span>
+    <span><b id="sActions">0</b> transactions</span>
+    <span id="sEffective" class="muted"></span>
+    <button type="button" class="lamps" id="sInvariants" title="The six invariants, checked against the contracts' balances"></button>
+    <button type="button" class="anoms" id="sAnomalies">0 unexpected reverts</button>
+    <span class="land" id="sLand" title="Land-years taken, against the threshold at which the last edition begins"><span class="meter"><i id="sLandBar"></i></span> <span id="sLandText"></span></span>
+    <span class="muted" id="sScale"></span>
+  </div>
+
+  <main class="layout" id="simView">
+    <section class="left">
+      <div class="ticker" id="ticker" role="group" aria-label="The platform's home-page indicators"></div>
+      <div class="kpis" id="kpis"></div>
+
+      <section class="panel" aria-labelledby="boardTitle">
+        <header class="panel-head">
+          <h2 id="boardTitle">Covenants</h2>
+          <div class="legend" id="legend"></div>
+          <label class="check"><input type="checkbox" id="showFinished"> Show finished</label>
+        </header>
+        <div class="lanes" id="lanes"></div>
+      </section>
+
+      <div class="charts">
+        <section class="panel chart"><h3>Paid out, by who received it</h3><div class="cbox"><canvas id="cPaid"></canvas></div></section>
+        <section class="panel chart"><h3>Held by the protocol</h3><div class="cbox"><canvas id="cHeld"></canvas></div></section>
+        <section class="panel chart"><h3>Covenants by state</h3><div class="cbox"><canvas id="cStates"></canvas></div></section>
+        <section class="panel chart"><h3>TREE supply and the edition</h3><div class="cbox"><canvas id="cTree"></canvas></div></section>
+        <section class="panel chart"><h3>TR3 mint price and market cap</h3><div class="cbox"><canvas id="cMarket"></canvas></div></section>
+        <section class="panel chart"><h3>Hectare-years to the next edition</h3><div class="cbox"><canvas id="cTill"></canvas></div></section>
+      </div>
+
+      <section class="panel" aria-labelledby="walletsTitle">
+        <header class="panel-head">
+          <h2 id="walletsTitle">Wallets</h2>
+          <div class="chips" id="walletRoles" role="group" aria-label="Role"></div>
+        </header>
+        <p class="small muted" id="walletNote"></p>
+        <div class="table wallets"><table><thead id="walletHead"></thead><tbody id="walletBody"></tbody></table></div>
+      </section>
+    </section>
+
+    <aside class="right">
+      <section class="panel feed-panel" aria-labelledby="feedTitle">
+        <header class="panel-head">
+          <h2 id="feedTitle">What is happening</h2>
+          <label class="check"><input type="checkbox" id="showMinor"> Every event</label>
+        </header>
+        <div class="chips" id="chips" role="group" aria-label="Filter the feed"></div>
+        <ol class="feed" id="feed"></ol>
+      </section>
+
+      <section class="panel" aria-labelledby="stepTitle">
+        <header class="panel-head"><h2 id="stepTitle">Step in</h2></header>
+        <div class="step-grid">
+          <label for="reqCountry">A landowner asks for verification</label>
+          <div class="row"><select id="reqCountry"></select><button type="button" id="doRequest">Request</button></div>
+          <label for="freezeHolder">The server freezes a Trust Admin</label>
+          <div class="row"><select id="freezeHolder"></select><button type="button" id="doFreeze">Freeze</button></div>
+          <label for="statusCountry">The Council suspends or resumes a country</label>
+          <div class="row"><select id="statusCountry"></select><button type="button" id="doSuspend">Suspend</button><button type="button" id="doResume">Resume</button></div>
+        </div>
+        <p class="muted small">Pick any covenant on the board to challenge, block or hold it.</p>
+      </section>
+    </aside>
+  </main>
+
+  <main id="explorer" hidden></main>
+
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="drawer" id="drawer" hidden aria-labelledby="dTitle" role="dialog">
+    <header class="drawer-head">
+      <div><span class="eyebrow" id="dEyebrow"></span><h2 id="dTitle"></h2></div>
+      <button type="button" id="dClose" aria-label="Close">Close</button>
+    </header>
+    <div id="dBody"></div>
+  </aside>
+
+  <div class="overlay" id="overlay"><div class="setup-wrap"><p class="muted">Connecting to the local chain…</p></div></div>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

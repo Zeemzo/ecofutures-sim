@@ -1,0 +1,8 @@
+node_modules/
+dist/
+public/deployment.json
+resources/bin/
+release/
+sim/out/
+sim/report/
+.DS_Store

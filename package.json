@@ -1,0 +1,79 @@
+{
+  "name": "ecofutures-simulator",
+  "private": true,
+  "version": "1.1.0",
+  "type": "module",
+  "scripts": {
+    "abis": "node scripts/abis.mjs && node scripts/surface.mjs",
+    "dev": "npm run abis && vite",
+    "build": "npm run abis && tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "app": "npm run abis && vite build && electron .",
+    "dist:mac": "npm run abis && vite build && node scripts/fetch-anvil.mjs mac-arm64 mac-x64 && electron-builder --mac --arm64 --x64",
+    "dist:win": "npm run abis && vite build && node scripts/fetch-anvil.mjs win-x64 && electron-builder --win --x64",
+    "dist:linux": "npm run abis && vite build && node scripts/fetch-anvil.mjs linux-x64 linux-arm64 && electron-builder --linux --x64 --arm64"
+  },
+  "devDependencies": {
+    "chart.js": "4.4.1",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "i18n-iso-countries": "^7.13.0",
+    "puppeteer-core": "^23.10.4",
+    "tsx": "^4.19.2",
+    "typescript": "5.6.3",
+    "viem": "2.21.54",
+    "vite": "5.4.11"
+  },
+  "productName": "EcoFutures Simulator",
+  "description": "EcoFutures V11 on a local chain: configurable scenarios run on the real contracts.",
+  "author": {
+    "name": "EcoFutures",
+    "email": "azeemashraff@gmail.com"
+  },
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "io.ecofutures.simulator",
+    "productName": "EcoFutures Simulator",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/bin/${os}-${arch}",
+        "to": "bin"
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools",
+      "identity": null
+    },
+    "win": {
+      "target": [
+        "zip"
+      ],
+      "signAndEditExecutable": false
+    },
+    "dmg": {
+      "title": "EcoFutures Simulator"
+    },
+    "afterPack": "electron/afterPack.cjs",
+    "linux": {
+      "target": [
+        "AppImage",
+        "tar.gz"
+      ],
+      "category": "Development",
+      "executableName": "ecofutures-simulator",
+      "synopsis": "EcoFutures V11 on a local chain"
+    }
+  },
+  "homepage": "https://ecofutures.io"
+}
