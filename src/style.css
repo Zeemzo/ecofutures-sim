@@ -251,7 +251,7 @@ select, input { border: 1px solid var(--line); background: var(--surface); borde
 @media (max-width: 900px) {
   .setup-grid { grid-template-columns: minmax(0, 1fr); }
   /* one column: the scenarios become a row to swipe through, above the settings rather than pinned over them */
-  .scenarios { position: static; grid-auto-flow: column; grid-auto-columns: minmax(230px, 78%); overflow-x: auto; padding-bottom: 4px; }
+  .setup-grid > .scenarios { position: static; grid-auto-flow: column; grid-auto-columns: minmax(230px, 78%); overflow-x: auto; padding-bottom: 4px; }
 }
 .scenarios { display: grid; gap: 8px; position: sticky; top: 12px; }
 .card-s { display: grid; gap: 4px; text-align: left; padding: 12px 14px; border-radius: 9px; background: var(--surface); border: 1px solid var(--line); }
@@ -310,6 +310,7 @@ td.fixed { font-family: var(--mono); color: var(--muted); text-align: right; pad
   .table.countries td:nth-child(3) { order: -1; }
   .table.countries td.act::before { content: none; }
   .table.countries td input, .table.countries td select { width: 100% !important; min-width: 0; }
+  .setup-foot { position: static; } /* at the end of the page rather than holding a third of a phone's screen */
   .setup-foot .row { display: flex; flex-wrap: wrap; gap: 8px; }
   .setup-foot .row button, .setup-foot .row .file { flex: 1 1 auto; }
 }

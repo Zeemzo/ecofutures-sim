@@ -2,8 +2,12 @@ package org.ecofutures.simulator;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.graphics.Insets;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -11,6 +15,7 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.widget.FrameLayout;
 
 import androidx.webkit.WebViewAssetLoader;
 import androidx.webkit.WebViewClientCompat;
@@ -85,7 +90,19 @@ public class MainActivity extends Activity {
             }
         });
 
-        setContentView(web);
+        // Android 15 draws an app edge to edge, under the status bar, the gesture bar and any camera cutout; the page
+        // sits inside them, and above the keyboard while one is open
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(0xFF0E1512);
+        root.addView(web, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            root.setOnApplyWindowInsetsListener((v, insets) -> {
+                Insets i = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime());
+                v.setPadding(i.left, i.top, i.right, i.bottom);
+                return WindowInsets.CONSUMED;
+            });
+        }
+        setContentView(root);
         web.loadDataWithBaseURL(null, page("Starting the local chain…"), "text/html", "utf-8", null);
         startChain();
     }
