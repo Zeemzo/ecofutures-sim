@@ -25,7 +25,8 @@ const FORMATS: Record<string, Fmt> = {
   "registry.RequestEnded": (a, r) => ["lifecycle",
     n(a.reason) === 7 ? null as any : `${r} ends: ${EndReason[n(a.reason)]}.${a.refund > 0n ? ` ${usd(a.refund)} goes back to the guardian.` : ""}`],
   "registry.RequestReopened": (a, r) => ["challenge", `${r} reopens for another verifier; ${nameOf(a.barredVerifier)} is barred from it.`],
-  "registry.FlowAdvanced": (a, r) => ["lifecycle", `${r} moves to its next step: ${StepName[n(a.step)]}.`, true],
+  // the last step done reports no next step: the flow is complete and the term runs from here
+  "registry.FlowAdvanced": (a, r) => ["lifecycle", n(a.step) ? `${r} moves to its next step: ${StepName[n(a.step)]}.` : `${r} has completed its flow.`, true],
   "registry.CovenantMinted": (a, r) => ["lifecycle", `${r} is minted as EFT #${a.tokenId} to ${nameOf(a.guardian)}.`],
   "registry.SaleRecorded": (a, r) => ["money", a.complete
     ? `${nameOf(a.buyer)} buys ${r} for ${usd(a.price)}.`
