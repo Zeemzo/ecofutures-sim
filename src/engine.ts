@@ -719,10 +719,10 @@ export class Engine {
     const frozen = st.frozen;
     let cure = due === 0 && released < verifiedThrough && w.settled && !frozen;
     cure = cure || (released < verifiedThrough && w.settled && frozen && st.breachHold);
-    // an upheld finding holds the window's instalments "until a better record": the verifier fixes it in a week
-    // to three and re-verifies at once, rather than waiting for the next interval; the new window settling clean
-    // releases them
-    if (!cure && released < verifiedThrough && w.settled && !frozen && N(w.action) === WindowAction.CHALLENGED) {
+    // an upheld finding holds the window's instalments "until a better record", and a halt (windows unattested
+    // too many times running) holds them until a window is attested: either way the verifier re-verifies in a
+    // week to three rather than waiting for the next interval, opening a new window, whose settling releases them
+    if (!cure && released < verifiedThrough && w.settled && !frozen && (N(w.action) === WindowAction.CHALLENGED || st.halted)) {
       if (!this.cureAt.has(tid)) this.cureAt.set(tid, t + (7 + this.rand(15)) * DAY);
       if (t >= this.cureAt.get(tid)!) cure = true;
       else next = Math.min(next, this.cureAt.get(tid)!);
@@ -791,13 +791,13 @@ export class Engine {
     const r = <T = any>(c: Key, fn: string) => (batched
       ? bulk.readContract({ address: addr[c], abi: abis[c], functionName: fn, args: [tid] }) as Promise<T>
       : read<T>(c, fn, [tid]));
-    const [c, acct, w, vacant, overdue, undecided, due, frozen, breachHold] = await Promise.all([
+    const [c, acct, w, vacant, overdue, undecided, due, frozen, breachHold, halted] = await Promise.all([
       r("core", "getCovenant"), r("bank", "getAccount"), r("challenge", "getWindow"),
       r<boolean>("challenge", "seatVacant"), r<boolean>("core", "isVerificationOverdue"),
       r<boolean>("challenge", "hasUndecidedChallenge"), r("core", "nextVerificationDue"),
-      r<boolean>("bank", "isFrozen"), r<boolean>("challenge", "breachHold"),
+      r<boolean>("bank", "isFrozen"), r<boolean>("challenge", "breachHold"), r<boolean>("challenge", "releasesHalted"),
     ]);
-    return { c, acct, w, vacant, overdue, undecided, due: N(due), frozen, breachHold };
+    return { c, acct, w, vacant, overdue, undecided, due: N(due), frozen, breachHold, halted };
   }
 
   rescore(score: number): number {
@@ -829,8 +829,14 @@ export class Engine {
         const base = this.priceOf.get(rid) ?? 10n ** 21n;
         const price = (base * BigInt(80 + this.rand(80))) / 100n + 1n;
         await this.topUp(buyer, price);
-        if (await this.act(owner, "token", "list", [tid, price], "resale-list", rid)) {
-          await this.act(buyer, "token", "buy", [tid, price], "resale-buy", rid);
+        // the two ways the marketplace sells: the owner lists at a price and a patron buys, or a patron offers
+        // and the owner accepts
+        if (this.rand(2) === 0) {
+          if (await this.act(owner, "token", "list", [tid, price], "resale-list", rid)) {
+            await this.act(buyer, "token", "buy", [tid, price], "resale-buy", rid);
+          }
+        } else if (await this.act(buyer, "token", "makeOffer", [tid, price], "resale-offer", rid)) {
+          await this.act(owner, "token", "acceptOffer", [tid, buyer, price], "resale-accept", rid);
         }
       }
     }

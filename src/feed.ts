@@ -117,7 +117,13 @@ const FORMATS: Record<string, Fmt> = {
   // ---- TR3, resale, overcharge ----
   "tree.RewardClaimed": (a, r) => ["money",
     `TR3 is claimed on ${r}: ${tree(a.patronAmount)} to ${nameOf(a.patron)}, ${tree(a.guardianAmount)} to ${nameOf(a.guardian)}${a.referrerAmount > 0n ? `, ${tree(a.referrerAmount)} to ${nameOf(a.referrer)}` : ""}.`, true],
-  "token.Sold": (a, r) => ["money", `${nameOf(a.seller)} sells ${r} to ${nameOf(a.buyer)} for ${usd(a.price)}.`],
+  "token.Listed": (a, r) => ["money", `${nameOf(a.seller)} lists ${r} for sale at ${usd(a.price)}.`],
+  "token.ListingCancelled": (_a, r) => ["money", `${r} is taken off sale.`, true],
+  "token.OfferMade": (a, r) => ["money", `${nameOf(a.buyer)} offers ${usd(a.price)} for ${r}.`],
+  "token.OfferWithdrawn": (a, r) => ["money", `${nameOf(a.buyer)} withdraws an offer on ${r}.`, true],
+  "token.Sold": (a, r) => ["money", a.byOffer
+    ? `${nameOf(a.seller)} accepts ${nameOf(a.buyer)}'s offer: ${r} sold for ${usd(a.price)}.`
+    : `${nameOf(a.buyer)} buys ${r} from ${nameOf(a.seller)} at the listed ${usd(a.price)}.`],
   "overcharge.Overcharged": (a, r) => ["term",
     `${nameOf(a.patron)} spends expired EFT #${a.fuelTokenId} to overcharge ${r}: TR3 ×${n(a.multiplier)}.`],
 };
