@@ -91,6 +91,8 @@ export class Engine {
   windowPlan = new Map<bigint, number>();
   windowActAt = new Map<bigint, number>();
   verifyAt = new Map<bigint, number>();
+  /** When the verifier, its record found wanting, re-verifies with a better one (Core's cure: no new interval). */
+  cureAt = new Map<bigint, number>();
   planFor = new Map<bigint, number>();
   blockResolveAt = new Map<bigint, number>();
   yearlyAt = new Map<bigint, number>();
@@ -717,10 +719,19 @@ export class Engine {
     const frozen = st.frozen;
     let cure = due === 0 && released < verifiedThrough && w.settled && !frozen;
     cure = cure || (released < verifiedThrough && w.settled && frozen && st.breachHold);
+    // an upheld finding holds the window's instalments "until a better record": the verifier fixes it in a week
+    // to three and re-verifies at once, rather than waiting for the next interval; the new window settling clean
+    // releases them
+    if (!cure && released < verifiedThrough && w.settled && !frozen && N(w.action) === WindowAction.CHALLENGED) {
+      if (!this.cureAt.has(tid)) this.cureAt.set(tid, t + (7 + this.rand(15)) * DAY);
+      if (t >= this.cureAt.get(tid)!) cure = true;
+      else next = Math.min(next, this.cureAt.get(tid)!);
+    }
     if (!st.vacant && windowRan && !st.undecided) {
       if ((due !== 0 && t >= this.verifyAt.get(tid)! && t >= due) || cure) {
         const late = due !== 0 && t - due > this.sc.contracts.maxVerificationDelayDays * DAY;
         if (await this.act(c.verifier, "core", "verify", [tid, this.rescore(N(c.ecoScore)), 0, ""], "verify", rid)) {
+          this.cureAt.delete(tid);
           if (cure) this.note("cure", rid, `${nameOf(c.verifier)} re-verifies #${rid} to release instalments held by a finding.`);
           else if (late) this.note("late", rid, `${nameOf(c.verifier)} verifies #${rid} ${Math.round((t - due) / DAY)} days late.`);
           if (this.rand(1000) < this.b.blockPermille && t < termEnd) {
