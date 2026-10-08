@@ -8,6 +8,7 @@ import {
   OutcomeName, register, nameOf, countryName,
 } from "./model";
 import type { Scenario, Behaviour, CountryConfig } from "./config";
+import { Control } from "./control";
 
 const N = (x: unknown) => Number(x);
 const enc = (types: string[], values: unknown[]) =>
@@ -53,6 +54,8 @@ export class Engine {
   /** Transactions each address has sent (the platform's per-wallet count). */
   txBy = new Map<string, number>();
   anomalies: Anomaly[] = [];
+  /** What the person at the screen has taken over: those steps wait for them instead of being sent. */
+  control = new Control();
   notes: Note[] = [];
   kinds: Record<string, number> = {};
   onNote: (n: Note) => void = () => {};
@@ -80,6 +83,8 @@ export class Engine {
 
   // per request
   requests: number[] = [];
+  /** Each request's country, from its creation. */
+  countryOf: Record<number, number> = {};
   nextAt = new Map<number, number>();
   done = new Set<number>();
   fate = new Map<number, number>();
@@ -141,7 +146,9 @@ export class Engine {
   }
 
   arrivalsOver(): boolean {
-    if (this.b.maxRequests > 0 && this.requests.length >= this.b.maxRequests) return true;
+    // a landowner's request waiting for the person counts: it is theirs to make, not another arrival's
+    const waiting = [...this.control.moves.values()].filter((m) => m.fn === "requestVerification").length;
+    if (this.b.maxRequests > 0 && this.requests.length + waiting >= this.b.maxRequests) return true;
     return this.b.fillLand ? this.landFull : this.now >= this.start + this.b.arrivalYears * YEAR;
   }
 
@@ -153,7 +160,8 @@ export class Engine {
     for (const [k, v] of Object.entries(this)) {
       // the reads it remembers are part of what it knows: a replay must start from the same memory
       // and so is the scenario: a law change moves a country's term range in it
-      if (typeof v === "function" || k === "b" || k === "rng" || k === "volatile" || k === "preReq" || k === "preTerm") continue;
+      // what the person has taken over is theirs, not the run's: it stays as it is when they travel
+      if (typeof v === "function" || k === "b" || k === "rng" || k === "volatile" || k === "preReq" || k === "preTerm" || k === "control") continue;
       fields[k] = v;
     }
     return { fields: structuredClone(fields), rng: this.rng.state };
@@ -209,6 +217,7 @@ export class Engine {
 
   /** Act as `who`. A revert the simulation did not plan for is recorded, not hidden. */
   async act(who: Address, c: Key, fn: string, args: readonly unknown[], label: string, rid = 0): Promise<boolean> {
+    if (this.yours(who, c, fn, args, label, rid)) return false;
     this.actions++;
     const r = await send(who, c, fn, args);
     if (!r.ok) this.anomalies.push({ t: this.now, label, rid, error: r.error });
@@ -217,7 +226,8 @@ export class Engine {
   }
 
   /** A call whose failure is expected and harmless (a panel member who already voted, an extra approval). */
-  async attempt(who: Address, c: Key, fn: string, args: readonly unknown[]): Promise<boolean> {
+  async attempt(who: Address, c: Key, fn: string, args: readonly unknown[], rid = 0): Promise<boolean> {
+    if (this.yours(who, c, fn, args, fn, rid)) return false;
     this.actions++;
     const ok = (await send(who, c, fn, args)).ok;
     if (ok) this.wrote(c);
@@ -413,6 +423,7 @@ export class Engine {
       [country, BigInt(land), term, parcel, ref, fee + att + jud, "sim"], "request", rid);
     if (!ok) return 0;
     this.requests.push(rid);
+    this.countryOf[rid] = country;
     this.fate.set(rid, forced !== undefined ? F.NORMAL : this.drawFate(country));
     this.nextAt.set(rid, this.now + DAY + this.rand(10) * DAY);
     this.kinds.request = (this.kinds.request ?? 0) + 1;
@@ -902,6 +913,13 @@ export class Engine {
   }
 
   // =====================================================================================
+  /** A step the person has taken over is not sent: it waits on the screen as their move. */
+  private yours(who: Address, c: Key, fn: string, args: readonly unknown[], label: string, rid: number): boolean {
+    if (!this.control.mine(who, rid, `${c}.${fn}`)) return false;
+    this.control.propose(this.now, who, c, fn, args, label, rid);
+    return true;
+  }
+
   // Challenges
   // =====================================================================================
 
@@ -910,6 +928,8 @@ export class Engine {
     const ch = await this.pickIndependent(country, defendant, guardian, exclude);
     if (ch === zeroAddress) return "No independent verifier is available to raise it.";
     const cid = await read<bigint>("challenge", "nextChallengeId");
+    // a challenge the person raises from the screen is theirs already; one a simulated actor would raise may be theirs to make
+    if (forced === undefined && this.yours(ch, "challenge", "raise", [kind, subject, "the record does not match the land"], "raise", rid)) return "";
     const r = await send(ch, "challenge", "raise", [kind, subject, "the record does not match the land"]);
     this.actions++;
     if (r.ok) this.wrote("challenge");
@@ -959,7 +979,7 @@ export class Engine {
         const f = o === Outcome.SCORE ? Finding.SCORE : o === Outcome.DOCUMENTS ? Finding.DOCUMENTS : Finding.NONE;
         let votes = 0;
         for (let k = 0; k < 3 && votes < 2; k++) {
-          if (await this.attempt(c.panel[k], "challenge", "vote", [cid, upheld, f, o === Outcome.BREACH])) votes++;
+          if (await this.attempt(c.panel[k], "challenge", "vote", [cid, upheld, f, o === Outcome.BREACH], rid)) votes++;
         }
         if (N((await read("challenge", "getChallenge", [cid])).state) !== ChallengeState.DETERMINED && t >= deadline) {
           await this.act(this.patrons[0], "challenge", "lapse", [cid], "lapse", rid);
@@ -1132,6 +1152,16 @@ export class Engine {
   // =====================================================================================
   // Interventions: what a viewer can do between ticks
   // =====================================================================================
+
+  /** A request someone made from the screen, not the simulation: its actors take it on from here, with nothing
+   *  planned to go wrong. */
+  adopt(rid: number, country: number) {
+    if (this.countryOf[rid] !== undefined) return;
+    this.requests.push(rid);
+    this.countryOf[rid] = country;
+    this.fate.set(rid, F.NORMAL);
+    this.nextAt.set(rid, this.now + DAY);
+  }
 
   async userRequest(country: number): Promise<string> {
     const rid = await this.arrival(country);

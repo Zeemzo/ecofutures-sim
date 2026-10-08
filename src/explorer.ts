@@ -6,7 +6,7 @@ import surface from "./surface.json";
 import { addr, read, send, type Key, type Decoded } from "./chain";
 import { nameOf, knownActors, dateOf } from "./model";
 
-type Param = { name: string; type: string; components?: Param[]; internalType?: string };
+export type Param = { name: string; type: string; components?: Param[]; internalType?: string };
 type Fn = {
   name: string; sig: string; mutability: string; read: boolean; inputs: Param[]; outputs: Param[]; notice: string;
   details: string; params: Record<string, string>; returns: Record<string, string>; access: string; plumbing: boolean;
@@ -59,7 +59,7 @@ function parseScalar(type: string, raw: string): unknown {
   return v;
 }
 
-function parseValue(p: Param, raw: unknown): unknown {
+export function parseValue(p: Param, raw: unknown): unknown {
   if (p.type.endsWith("]")) {
     const arr = typeof raw === "string" ? JSON.parse(raw || "[]") : raw;
     const inner = { ...p, type: p.type.slice(0, p.type.lastIndexOf("[")) };
@@ -83,7 +83,7 @@ function show(v: unknown): string {
   return JSON.stringify(fmt(v), null, 2);
 }
 
-function placeholder(p: Param): string {
+export function placeholder(p: Param): string {
   if (p.type.endsWith("]")) return "a JSON list, e.g. [1, 2]";
   if (p.type === "tuple") return `JSON: {${(p.components ?? []).map((c) => `"${c.name}": …`).join(", ")}}`;
   if (p.type === "address") return "0x… or an actor's name";

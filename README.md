@@ -97,6 +97,11 @@ remembered between launches and can be saved to and loaded from a file. **Reset*
 - **The board**: every request by country and stage. Pick one for its facts, its instalments and history, and to
   step in: raise a challenge (choosing the finding), have its verifier block it, or have the Council hold it.
 - **Step in**: a landowner request now, an emergency freeze of a Trust Admin, a country suspended or resumed.
+- **Take over**: play any part of the run yourself: an actor, a request, a whole role (every guardian, every verifier,
+  every patron, every Trust Admin, the Council, the server, the Foundation) or a country. The simulated actors stop
+  doing it; each step they would have taken waits under **Your moves** with the values they would have used, for you
+  to change, do or skip, and the clock pauses when one appears. **Act freely** makes any call of the role, as anyone,
+  with values you choose. A revert shows the contract's reason. Hand a part back and the simulation carries on with it.
 - **The strip**: the six invariants, checked against the contracts' balances at a single block, the land placed
   across the 21 editions, and any call an actor expected to succeed that reverted.
 - **Contracts** (the second tab): every contract, function, event and error, with live reads and sends as any actor.

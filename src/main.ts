@@ -7,6 +7,7 @@ import { latestBlock, mineAt, logsBetween, snapshot, revertTo, read, prepareChai
 import { deploy } from "./deploy";
 import { mountSetup, type Choice } from "./setup";
 import { mountExplorer } from "./explorer";
+import { mountTakeover } from "./takeover";
 import type { Decoded } from "./chain";
 import { FLOWS, PRODUCTION, TIMINGS, LISTING_DAYS, type Scenario } from "./config";
 import { Engine, LAST_EDITION } from "./engine";
@@ -76,6 +77,7 @@ const S = {
   /** Every decoded event of the run, for the explorer. */
   raw: [] as Decoded[],
   explorer: null as ReturnType<typeof mountExplorer> | null,
+  takeover: null as ReturnType<typeof mountTakeover> | null,
   /** A date the clock is travelling forward to, the actors living every day on the way; 0 when not travelling. */
   travelTarget: 0,
   /** The chain's own time: the last stop the actors acted at. The clock on screen may run ahead of it between stops. */
@@ -158,6 +160,16 @@ async function setupProgramme({ scenario, seed }: Choice) {
     S.engine = new Engine(seed, scenario);
     S.ended = false;
     $("endBanner")?.remove();
+    // what the person takes over waits for them; a new move of theirs stops the clock if they asked it to
+    const control = S.engine.control;
+    control.countryOf = (rid) => S.engine.countryOf[rid] ?? 0;
+    control.onNewMove = (m) => {
+      if (!control.pauseOnMove || !(S.running || S.travelTarget)) return;
+      S.running = false;
+      S.travelTarget = 0;
+      updatePlay();
+      toast(`Your move: ${nameOf(m.who)}, ${m.c}.${m.fn}${m.rid ? ` on #${m.rid}` : ""}.`);
+    };
     S.engine.onNote = (n) => pushEntry({ t: n.t, rid: n.rid, cat: n.kind === "stranded" || n.kind === "land-full" ? "alert" : "note", text: n.text, seq: S.seq++ });
     S.ledger = new Ledger();
     S.entries = []; S.raw = []; S.seq = 0; S.samples = []; S.invChecks = 0; S.invFails = [0, 0, 0, 0, 0, 0]; S.seen.clear();
@@ -232,7 +244,7 @@ async function loop() {
     } else {
       // the clock on screen runs at the chosen speed; the chain catches up a stop at a time
       S.clock += Math.min(S.speed * dt, MAX_STEP);
-      for (let n = 0; n < 8 && !S.ended; n++) {
+      for (let n = 0; n < 8 && !S.ended && S.running; n++) {
         const stop = nextStop(S.chainAt, S.engine.nextDue());
         if (stop > S.clock) break;
         await advance(stop);
@@ -249,6 +261,8 @@ async function advance(target: number) {
     let t = before.timestamp;
     if (Math.floor(target) > before.timestamp) t = (await mineAt(target)).timestamp;
     await S.engine.tick(t);
+    S.engine.control.prune(t);
+    S.takeover?.refresh();
     const after = await latestBlock();
     S.chainAt = after.timestamp;
     S.clock = Math.max(S.clock, after.timestamp);
@@ -293,6 +307,8 @@ async function ingest(t: number) {
   const logs = await logsBetween(S.lastLogBlock + 1n, b.number);
   S.lastLogBlock = b.number;
   for (const e of logs) {
+    // a request made from the screen joins the run: the simulated actors take it on
+    if (e.contract === "registry" && e.name === "VerificationRequested") S.engine.adopt(Number(e.args.requestId), Number(e.args.country));
     S.raw.push(e);
     S.ledger.ingest(e);
     const entry = describe(e, S.ledger, S.seq++, t);
@@ -368,6 +384,7 @@ function render() {
   renderBoard();
   renderCharts();
   void renderWallets(false);
+  S.takeover?.refresh();
   if (S.openRid) void renderDrawer(S.openRid, false);
 }
 
@@ -743,13 +760,15 @@ async function renderDrawer(rid: number, force: boolean) {
     <button type="button" id="dChallenge" ${canChallenge ? "" : "disabled"}>Raise a challenge</button></div>
     ${canChallenge ? "" : `<span class="small muted">${row.tokenId ? "A challenge needs an open review window: one opens with each re-verification." : "A challenge is possible in the watchdog window after the verification."}</span>`}
     <div class="row"><button type="button" id="dBlock" ${isTerm || row.stage === "for-sale" ? "" : "disabled"}>The verifier blocks it</button>
-    <button type="button" id="dFreeze" ${isTerm ? "" : "disabled"}>${row.frozen ? "Council releases the instalments" : "Council holds the instalments"}</button></div></div>`;
+    <button type="button" id="dFreeze" ${isTerm ? "" : "disabled"}>${row.frozen ? "Council releases the instalments" : "Council holds the instalments"}</button></div>
+    <div class="row"><button type="button" id="dTake" ${S.engine.control.requests.has(rid) ? "disabled" : ""}>${S.engine.control.requests.has(rid) ? "You control this request" : "Take over this request"}</button></div></div>`;
   const hist = S.entries.filter((e) => e.rid === rid).slice(-200).reverse();
   $("dBody").innerHTML = `<dl class="facts">${facts.join("")}</dl>${progress}${windowInfo}${acts}
     <section><h3>History</h3><ol class="history">${hist.map((e) => `<li><time>${dateOf(e.t)}</time><span>${esc(e.text)}</span></li>`).join("") || "<li>Nothing yet.</li>"}</ol></section>`;
   $("dChallenge").onclick = () => enqueue(() => S.engine.userChallenge(rid, Number(($("dOutcome") as HTMLSelectElement).value)));
   $("dBlock").onclick = () => enqueue(() => S.engine.userBlock(rid));
   $("dFreeze").onclick = () => enqueue(() => S.engine.userFreezeDrip(rid, !row.frozen));
+  $("dTake").onclick = () => { S.takeover?.takeRequest(rid); toast(`You control #${rid}: its steps wait for you in Take over.`); void renderDrawer(rid, true); };
 }
 
 function renderAnomalies() {
@@ -972,6 +991,12 @@ function wire() {
   $("doFreeze").onclick = () => enqueue(() => S.engine.userEmergencyFreeze(($("freezeHolder") as HTMLSelectElement).value as Address));
   $("doSuspend").onclick = () => enqueue(async () => { const m = await S.engine.userCountryStatus(Number(($("statusCountry") as HTMLSelectElement).value), false); await refreshCountryStatus(); return m; });
   $("doResume").onclick = () => enqueue(async () => { const m = await S.engine.userCountryStatus(Number(($("statusCountry") as HTMLSelectElement).value), true); await refreshCountryStatus(); return m; });
+  S.takeover = mountTakeover($("takeover"), {
+    control: () => S.engine?.control,
+    enqueue,
+    countries: () => (S.scenario?.countries ?? []).map((c) => ({ code: c.code, name: c.name })),
+    requests: () => S.engine?.requests ?? [],
+  });
   $("legend").innerHTML = [["s-watchdog", "Verification"], ["s-flow", "Deeds"], ["s-auction", "Sale"], ["s-active", "Term"], ["s-blocked", "Blocked"]]
     .map(([c, l]) => `<span><i class="${c}" style="background:currentColor"></i>${l}</span>`).join("");
   redrawFeed();
