@@ -122,6 +122,10 @@ const FORMATS: Record<string, Fmt> = {
     ? `Edition ${n(a.edition)}'s eight years are up with ${ha(a.landYears)} ha-yr placed: the ${tree(a.burned)} no land took are burned${n(a.edition) < 21 ? `, and edition ${n(a.edition) + 1} opens` : ", and the programme closes"}.`
     : `Edition ${n(a.edition)} is full${n(a.edition) < 21 ? `: edition ${n(a.edition) + 1} opens` : ": the programme closes"}.`],
 
+  "tree.PlaceSettled": (a, r) => ["money", a.minting === 0n
+    ? `${r}'s land never became a covenant: the ${tree(a.tr3AtFullScore)} its place held are burned.`
+    : `${r}'s TR3 is final: it mints ${tree(a.minting)} of the ${tree(a.tr3AtFullScore)} its place held at a score of 100; the other ${tree(a.burned)} are burned.`, true],
+
   // ---- TR3, resale ----
   "tree.RewardClaimed": (a, r) => ["money",
     `TR3 is claimed on ${r}: ${tree(a.patronAmount)} to ${nameOf(a.patron)}, ${tree(a.guardianAmount)} to ${nameOf(a.guardian)}${a.referrerAmount > 0n ? `, ${tree(a.referrerAmount)} to ${nameOf(a.referrer)}` : ""}.`, true],

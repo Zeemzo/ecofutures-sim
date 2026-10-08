@@ -105,6 +105,7 @@ writeFileSync(new URL("failed.jsonl", OUT), failed.map((f) => JSON.stringify(f))
 
 type Check = { id: string; area: string; rule: string; source: string; checked: number; failures: { ref: string; detail: string }[] };
 const checks: Check[] = [];
+const observations: Record<string, unknown> = {};
 function check(id: string, area: string, rule: string, source: string) {
   const c: Check = { id, area, rule, source, checked: 0, failures: [] };
   checks.push(c);
@@ -341,11 +342,21 @@ const splitAt = (block: number) => [...feeSplits].reverse().find((f) => f.block 
   const placeOfReq = new Map<number, { edition: number; full: bigint }>();
   const requested = new Map<number, bigint>(); // each request's land × term, in land-years
   const ranges = new Map<number, [number, number]>();
-  const order = events.filter((e) => ["LandPlaced", "EditionClosed", "EditionAssigned", "RewardStarted", "VerificationRequested", "SettingsApplied", "CountryEnabled"].includes(e.name));
+  const settledCheck = check("tr3-settled", "TR3", "A placed land's TR3 that will never be minted is burned when that is certain: its place at a score of 100 = what its covenant mints + what is burned (all of it for a land that never became a covenant)", "Tree.settle and release; TR3 model v4, rule 1");
+  const minting = new Map<number, bigint>(); // request -> what its covenant mints, once settled
+  const order = events.filter((e) => ["LandPlaced", "EditionClosed", "EditionAssigned", "RewardStarted", "VerificationRequested", "SettingsApplied", "CountryEnabled", "PlaceSettled"].includes(e.name));
+  const tokenOfReq = new Map<number, bigint>([...reqOfToken].map(([tid, rid]) => [rid, tid]));
   for (const e of order) {
     const t = BigInt(e.t);
     if (e.name === "SettingsApplied" || e.name === "CountryEnabled") { ranges.set(N(e.a.country), [N(e.a.settings.minTermYears), N(e.a.settings.maxTermYears)]); continue; }
-    if (e.name === "EditionClosed") {
+    if (e.name === "PlaceSettled") {
+      const rid = N(e.a.requestId), p = placeOfReq.get(rid);
+      const full = p ? p.full - (p.full % 100n) : -1n; // the place keeps its TR3 per point of score
+      const covenant = tokenOfReq.has(rid);
+      settledCheck.test(e.a.tr3AtFullScore === full && e.a.burned === e.a.tr3AtFullScore - e.a.minting && (covenant || e.a.minting === 0n) && !minting.has(rid), `#${rid}`,
+        () => `settled ${usd(e.a.tr3AtFullScore)}: mints ${usd(e.a.minting)}, burns ${usd(e.a.burned)}; its place held ${usd(full)}${covenant ? "" : ", and it never became a covenant"}`);
+      minting.set(rid, e.a.minting);
+    } else if (e.name === "EditionClosed") {
       if (e.a.byClock) closeModel(true, t, e); else fills.push(e);
     } else if (e.name === "LandPlaced") {
       // replay the place: the open edition first, the rest into the next, each filled edition closing as it fills
@@ -388,6 +399,33 @@ const splitAt = (block: number) => [...feeSplits].reverse().find((f) => f.block 
       term.test(y >= lo && y <= Math.min(hi, maxY), `#${e.a.requestId}`, () => `${y} years for ${N(units) / 100} ha in ${e.a.country}: range ${lo}-${Math.min(hi, maxY)}`);
     }
   }
+  // each settled covenant mints exactly what its settlement says: what it has minted + what it can still claim
+  const mintedBy = new Map<bigint, bigint>();
+  for (const e of by("RewardClaimed")) mintedBy.set(e.a.tokenId, (mintedBy.get(e.a.tokenId) ?? 0n) + e.a.patronAmount + e.a.guardianAmount + e.a.referrerAmount);
+  const mints = check("tr3-settled-mints", "TR3", "A settled covenant mints what its settlement said: minted + still claimable = its settled amount", "Tree.settle");
+  let claimableNow = 0n;
+  for (const [rid, m] of minting) {
+    const tid = tokenOfReq.get(rid);
+    if (tid === undefined) continue;
+    const v = await bulk.readContract({ address: addr.tree, abi: abis.tree, functionName: "rewardOf", args: [tid], ...at }) as any;
+    const claimable = v.patronClaimable + v.guardianClaimable + v.referralClaimable;
+    claimableNow += claimable;
+    const done = (mintedBy.get(tid) ?? 0n) + claimable;
+    mints.test((done > m ? done - m : m - done) <= 10n, R(tid), () => `settled at ${usd(m)}; minted ${usd(mintedBy.get(tid) ?? 0n)} and ${usd(claimable)} claimable`);
+  }
+  // the contract's burned total is the editions' burns and the settlements', to the wei
+  const burnedNow = await bulk.readContract({ address: addr.tree, abi: abis.tree, functionName: "burned", ...at }) as bigint;
+  const burnSum = by("EditionClosed").reduce((x, e) => x + e.a.burned, 0n) + by("PlaceSettled").reduce((x, e) => x + e.a.burned, 0n);
+  check("tr3-burned", "TR3", "Tree's burned = what closed editions burned + what settled places burned", "Tree.burned").test(burnedNow === burnSum, "TREE", () => `burned ${usd(burnedNow)}, events ${usd(burnSum)}`);
+  // once the programme has closed with every place settled, all 21 editions' TR3 is minted, claimable or burned
+  const supplyNow = await bulk.readContract({ address: addr.tree, abi: abis.tree, functionName: "totalSupply", ...at }) as bigint;
+  const closedAll = by("EditionClosed").length === LAST_EDITION, allSettled = placeOfReq.size === minting.size;
+  const whole = BigInt(LAST_EDITION) * PER_EDITION, accounted = supplyNow + burnedNow + claimableNow;
+  if (closedAll && allSettled) {
+    check("tr3-accounted", "TR3", "With the programme closed and every place settled, minted + burned + claimable = 21 × 10,000,000 TR3 (less rounding: under 100 wei a place)", "TR3 model v4, rule 1")
+      .test(whole - accounted >= 0n && whole - accounted <= 100n * BigInt(placeOfReq.size + 1), "TREE", () => `${usd(accounted)} accounted for of ${usd(whole)}`);
+  }
+  observations.tr3 = { placed: usd([...placeOfReq.values()].reduce((x, p) => x + p.full, 0n)), minted: usd(supplyNow), burned: usd(burnedNow), claimable: usd(claimableNow), settled: `${minting.size} of ${placeOfReq.size} places`, programmeClosed: closedAll };
 }
 
 // ---- timing ----
@@ -493,7 +531,6 @@ function nameShort(a: string) { return `${a.slice(0, 8)}…`; }
 }
 
 // ---- observations (not rules) ----
-const observations: Record<string, unknown> = {};
 {
   const closed = by("EditionClosed");
   observations.editions = { closed: closed.length, byClock: closed.filter((e) => e.a.byClock).length,

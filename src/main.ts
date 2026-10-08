@@ -426,7 +426,7 @@ function renderTicker() {
     item("EFTs sold", c.sold.toLocaleString("en-US"), "EFTs sold and still standing"),
     item("TR3 minted", money(c.tr3Supply, 2), "TREE supply"),
     item("Till next edition", `${hectareYears(c.tillNextEdition)} ha-yr`, "Hectare-years of land still to place before the open edition fills; eight years after it opened it closes anyway"),
-    item("TR3 burned", money(c.burned, 2), "TR3 of editions that closed by the clock with land unplaced: burned, so each edition still accounts for its 10,000,000"),
+    item("TR3 burned", money(c.burned, 2), "TR3 that will never be minted: room no land took when an edition closed, and what placed lands will not mint (an EcoScore below 100, the per-covenant cap, a cancellation's forfeit, a request that ended before its covenant). Each edition's 10,000,000 is minted or burned"),
   ].join("");
 }
 

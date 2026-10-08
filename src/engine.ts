@@ -784,6 +784,7 @@ export class Engine {
           await this.act(this.patrons[0], "challenge", "sweepReviewPool", [tid], "sweep", rid);
         }
         await this.claimTR3(rid, tid);
+        await this.settleTR3(rid, tid);
         this.note("complete", rid, `#${rid} is complete: every instalment released, the review pool settled.`);
         this.done.add(rid);
         return;
@@ -867,6 +868,15 @@ export class Engine {
         await this.act(g2, "core", "acceptPayee", [tid], "acceptPayee", rid);
       }
     }
+  }
+
+  /** Burn what the covenant will not mint of its place, once its TR3 is final (a claim may have done it). */
+  async settleTR3(rid: number, tid: bigint) {
+    const [, , , settled] = await read<[number, number, bigint, boolean]>("tree", "placeOf", [BigInt(rid)]);
+    if (settled) return;
+    const v = await read("tree", "rewardOf", [tid]);
+    const c = await read("core", "getCovenant", [tid]);
+    if (N(v.accruesUntil) >= N(c.termEnd)) await this.act(this.patrons[0], "tree", "settle", [tid], "settleTR3", rid);
   }
 
   async claimTR3(rid: number, tid: bigint) {

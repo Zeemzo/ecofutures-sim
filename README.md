@@ -58,7 +58,8 @@ back.
   - *Until the programme closes* — landowners arrive until all 21 editions are closed, then every term runs out.
     Its editions are 1/1,000 of production's size, so they fill in a few decades.
   - *A good day, every edition* — nothing goes wrong (no challenges, cancellations or lapses; verifiers on time;
-    every window attested; every EFT sold) while landowners arrive until all 21 editions have filled, none burned.
+    every window attested; every EFT sold) while landowners arrive until all 21 editions have filled, none by the
+    clock. Its editions are small but its plots production-sized, so many covenants reach the 1,000,000 TR3 cap.
   - *Slow uptake: TR3 burned* — production editions and three landowners a year: the first editions fill, the later
     ones run out their eight years unfilled, and the TR3 no land took is burned.
   - *One covenant, start to finish* — a single Sri Lanka request with nothing going wrong; use **Next action**.
