@@ -15,7 +15,7 @@ const enc = (types: string[], values: unknown[]) =>
 const h = (...parts: (string | number | bigint)[]) =>
   keccak256(enc(parts.map((p) => (typeof p === "string" ? "string" : "uint256")), parts.map((p) => (typeof p === "number" ? BigInt(p) : p))));
 
-export const LAST_EDITION = 12;
+export const LAST_EDITION = 21;
 
 // pre-mint fates
 const F = { NORMAL: 0, CANCEL: 1, CLAIM_LAPSE: 2, ABANDON: 3, CHALLENGE: 4, UNSOLD: 5, LAPSE_NOTHING: 6, LAPSE_UNATTESTED: 7 };
@@ -337,12 +337,15 @@ export class Engine {
   async tick(t: number): Promise<void> {
     this.now = t;
     this.volatile.clear();
+    // an edition whose eight years are up is closed now, so its burn lands when it falls due, not at the next placement
+    const open = N(await read("tree", "editionOpen"));
+    if (open <= LAST_EDITION && N(await read("tree", "currentEdition")) !== open) await this.act(this.server, "tree", "closeEditionIfDue", [], "closeEdition");
     const mean = YEAR / Math.max(0.1, this.b.arrivalsPerYear);
     while (!this.arrivalsOver() && t >= this.nextArrival) {
-      if (this.b.fillLand && N(await read("tree", "currentEdition")) >= LAST_EDITION) {
+      if (this.b.fillLand && N(await read("tree", "currentEdition")) > LAST_EDITION) {
         this.landFull = true;
         this.landFullAt = t;
-        this.note("land-full", 0, `Edition ${LAST_EDITION}, the last, has begun: the land the editions schedule is taken. No more landowners are admitted; the covenants already made run out their terms.`);
+        this.note("land-full", 0, `All ${LAST_EDITION} editions are closed: the programme's TR3 is committed or burned. No more landowners are admitted; the covenants already made run out their terms.`);
         break;
       }
       await this.arrival();
@@ -380,6 +383,10 @@ export class Engine {
     const c = await read("countries", "getCountry", [country]);
     if (N(c.status) !== 1) {
       this.note("refused", 0, `A landowner in ${countryName(country)} is turned away: the country is suspended.`);
+      return 0;
+    }
+    if (N(await read("tree", "currentEdition")) > LAST_EDITION) {
+      this.note("refused", 0, `A landowner in ${countryName(country)} is turned away: all ${LAST_EDITION} editions are closed.`);
       return 0;
     }
     const minLand = N(await read("tree", "minLandUnits"));
@@ -441,6 +448,18 @@ export class Engine {
     if (status === RequestStatus.ENDED) {
       if (N(r.endReason) === 7) await this.term(rid, r.tokenId);
       else await this.finishCancelled(rid, r.tokenId);
+      return;
+    }
+    // once all 21 editions have closed no land is placed: a request not yet verified cannot be, and its
+    // guardian withdraws it, refunded in full, once nobody holds a live claim on it
+    const closed = (status === RequestStatus.OPEN || status === RequestStatus.CLAIMED) && N(await read("tree", "currentEdition")) > LAST_EDITION;
+    if (closed) {
+      const live = status === RequestStatus.CLAIMED && t <= N(r.claimedAt) + this.acceptance;
+      if (live) { this.nextAt.set(rid, N(r.claimedAt) + this.acceptance + 1); return; }
+      if (await this.act(r.guardian, "registry", "cancelRequest", [BigInt(rid)], "cancel-closed", rid)) {
+        this.note("refused", rid, `Request #${rid} can no longer be verified: all ${LAST_EDITION} editions are closed. Its guardian withdraws it and is refunded in full.`);
+      }
+      this.nextAt.set(rid, t + DAY);
       return;
     }
     if (status === RequestStatus.OPEN) {
@@ -678,7 +697,8 @@ export class Engine {
     }
     if (openedAt !== 0 && !w.settled) {
       const wp = this.windowPlan.get(tid) ?? 0;
-      if (wp !== 0 && t >= this.windowActAt.get(tid)! && t <= closesAt() && N(w.action) === WindowAction.NONE) {
+      // an hour's margin: the window closes seconds after a midnight, and the call lands a few blocks after the check
+      if (wp !== 0 && t >= this.windowActAt.get(tid)! && t + 3600 <= closesAt() && N(w.action) === WindowAction.NONE) {
         if (wp === 1) {
           const a = await this.pickIndependent(N(c.country), c.verifier, c.guardian, zeroAddress);
           if (a !== zeroAddress) await this.act(a, "challenge", "attestVerification", [tid], "attestVerification", rid);
@@ -744,7 +764,7 @@ export class Engine {
     }
     if (due !== 0) { const va = this.verifyAt.get(tid)!; next = Math.min(next, va > t ? va : t + 7 * DAY); }
 
-    // ---- once a year: TR3, resale, payee, overcharge ----
+    // ---- once a year: TR3, resale, payee ----
     if (t >= (this.yearlyAt.get(tid) ?? 0)) {
       this.yearlyAt.set(tid, t + YEAR);
       await this.yearly(rid, tid, c);
@@ -845,21 +865,6 @@ export class Engine {
       const g2 = await this.newGuardian();
       if (await this.act(c.guardian, "core", "proposePayee", [tid, g2], "proposePayee", rid)) {
         await this.act(g2, "core", "acceptPayee", [tid], "acceptPayee", rid);
-      }
-    }
-    if (!this.b.overcharge) return;
-    // overcharge with an expired EFT of the same owner
-    owner = getAddress(await read<Address>("token", "ownerOf", [tid]));
-    const reward = await read("tree", "rewardOf", [tid]);
-    if (N(c.edition) >= 3 && N(reward.multiplier) === 1 && this.now + DAY < termEnd && !(await read<boolean>("bank", "isFrozen", [tid]))) {
-      for (const fuel of this.expiredTokens) {
-        if (fuel === tid) continue;
-        const fc = await read("core", "getCovenant", [fuel]);
-        if (N(fc.status) !== CovenantStatus.ACTIVE || N(fc.edition) >= N(c.edition)) continue;
-        if (await read<boolean>("overcharge", "spentAsFuel", [fuel])) continue;
-        if (getAddress(await read<Address>("token", "ownerOf", [fuel])) !== owner) continue;
-        await this.act(owner, "overcharge", "overcharge", [tid, fuel], "overcharge", rid);
-        break;
       }
     }
   }

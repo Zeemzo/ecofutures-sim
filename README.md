@@ -42,7 +42,8 @@ unknown developer: choose **Install anyway**. The app is signed for your own dev
 on while the app is in front: Android pauses a background app's network, its own chain included, so the screen stays
 on while the app is open.
 
-Each launch starts a fresh chain at 1 January 2027; quitting the app stops it.
+Each launch starts a fresh chain, and each run begins at the moment you press **Start**, to the second (times are
+shown in UTC). Quitting the app stops the chain.
 
 ## Setting up a run
 
@@ -54,15 +55,19 @@ back.
 
 - **Scenario**: what to investigate. Each sets the actors' behaviour:
   - *Fifteen years of arrivals* — about eight landowners a year for fifteen years, every term run to its end.
-  - *Until the land is full* — landowners arrive until the last edition begins, then every term runs out. Its
-    edition thresholds are 1/500 of production's: at production's, the land needs tens of millions of covenants.
+  - *Until the programme closes* — landowners arrive until all 21 editions are closed, then every term runs out.
+    Its editions are 1/1,000 of production's size, so they fill in a few decades.
+  - *A good day, every edition* — nothing goes wrong (no challenges, cancellations or lapses; verifiers on time;
+    every window attested; every EFT sold) while landowners arrive until all 21 editions have filled, none burned.
+  - *Slow uptake: TR3 burned* — production editions and three landowners a year: the first editions fill, the later
+    ones run out their eight years unfilled, and the TR3 no land took is burned.
   - *One covenant, start to finish* — a single Sri Lanka request with nothing going wrong; use **Next action**.
   - *Challenge stress*, *Trust Admin failure*, *Late and absent verifiers*, *Path B lapses*,
-    *Edition race* (tiny edition thresholds, editions moving between verification and mint), *Breaches and
+    *Edition race* (tiny editions that fill within months, one land often running across several), *Breaches and
     cancellations*, and *Custom*.
 - **Behaviour**: arrivals a year and for how long; the share of requests that cancel, lapse, are abandoned,
   challenged or go unsold; Path B lapses; how often review windows are attested or challenged; what panels find;
-  how late verifiers are; blocks, cancellations, resales, payee switches; overcharge; the governance calendar.
+  how late verifiers are; blocks, cancellations, resales, payee switches; the governance calendar.
 - **Contracts**: every timing, the halt threshold, V, the fee split, and the edition scale.
 - **Countries**: any country by ISO 3166 numeric code — its flow, term range, listing and post-sale windows, its
   fees, and its cast: Trust Admins, organisations each, verifiers per organisation, and its share of arrivals.
@@ -85,13 +90,14 @@ remembered between launches and can be saved to and loaded from a file. **Reset*
   again. Their choices are seeded, so the days replay exactly as before, unless you step in differently.
   **Pause** stops a journey where it is.
 - **The platform's figures**: the home page's market cap, TR3 mint price and its change, transactions, EFTs sold,
-  TR3 minted and the land left before the next edition, with charts over the run; and the dashboard's figures for
+  TR3 minted and the land left before the next edition (and the TR3 burned by editions the clock closed), with
+  charts over the run; and the dashboard's figures for
   every wallet (patrons, guardians, verifiers, Trust Admins).
 - **The board**: every request by country and stage. Pick one for its facts, its instalments and history, and to
   step in: raise a challenge (choosing the finding), have its verifier block it, or have the Council hold it.
 - **Step in**: a landowner request now, an emergency freeze of a Trust Admin, a country suspended or resumed.
-- **The strip**: the six invariants, checked against the contracts' balances at a single block, the land taken
-  toward the last edition, and any call an actor expected to succeed that reverted.
+- **The strip**: the six invariants, checked against the contracts' balances at a single block, the land placed
+  across the 21 editions, and any call an actor expected to succeed that reverted.
 - **Contracts** (the second tab): every contract, function, event and error, with live reads and sends as any actor.
 
 ## For developers
@@ -118,7 +124,7 @@ CONTRACTS_DIR=../evm-eco-futures-contracts/v11 npm run abis
 CONTRACTS_DIR=../evm-eco-futures-contracts/v11 node scripts/surface.mjs
 ```
 
-Without the browser, on any anvil node started with `--auto-impersonate --timestamp 1798761600 --gas-limit 100000000`:
+Without the browser, on any anvil node started with `--auto-impersonate --timestamp 1767225600 --gas-limit 100000000`:
 
 ```bash
 RPC=http://127.0.0.1:8546 SCENARIO=fifteen SEED=1 YEARS=40 npx tsx scripts/headless.ts  # a scenario by id

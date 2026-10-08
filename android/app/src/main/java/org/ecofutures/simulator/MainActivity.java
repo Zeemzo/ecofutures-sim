@@ -141,9 +141,9 @@ public class MainActivity extends Activity {
             rpc = "http://127.0.0.1:" + port;
             File lib = new File(getApplicationInfo().nativeLibraryDir);
             // through the launcher, which clears the signals the app's runtime blocks and ignores;
-            // 1 January 2027, a block gas limit large enough to deploy the contracts, recent states in memory only
+            // 1 January 2026 (each run jumps to its own start), a block gas limit large enough to deploy the contracts, recent states in memory only
             List<String> cmd = Arrays.asList(new File(lib, "liblaunch.so").getAbsolutePath(), new File(lib, "libanvil.so").getAbsolutePath(),
-                    "--auto-impersonate", "--timestamp", "1798761600",
+                    "--auto-impersonate", "--timestamp", "1767225600",
                     "--port", String.valueOf(port), "--gas-limit", "100000000", "--prune-history", "64", "--silent");
             ProcessBuilder pb = new ProcessBuilder(cmd).directory(getFilesDir()).redirectErrorStream(true)
                     .redirectInput(new File("/dev/null")).redirectOutput(new File(getFilesDir(), "anvil.log"));

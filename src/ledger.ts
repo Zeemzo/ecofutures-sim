@@ -37,7 +37,6 @@ export class Ledger {
     const a = e.args;
     if (a.requestId !== undefined) return Number(a.requestId);
     if (a.tokenId !== undefined) return this.reqOfToken.get(a.tokenId) ?? 0;
-    if (a.targetTokenId !== undefined) return this.reqOfToken.get(a.targetTokenId) ?? 0;
     if (a.challengeId) return this.reqOfChallenge.get(a.challengeId) ?? 0;
     return 0;
   }
@@ -129,6 +128,8 @@ export type Census = {
   /** The platform's home-page indicators: the sale prices of the EFTs sold and still standing, how many, the TR3
    *  those lands will mint over their terms, and the land-years before the next edition begins. */
   marketCap: bigint; sold: number; soldProjected: bigint; tillNextEdition: bigint;
+  /** The open edition's size in land-years, and the TR3 burned so far by editions closed with room left. */
+  capacity: bigint; burned: bigint;
 };
 
 /** Sold and still standing: not blocked, not cancelled (the platform's market cap counts these). */
@@ -207,10 +208,11 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
     if (done.has(rid)) finalParts.set(rid, p);
     return p;
   }));
-  const [registryBal, bankBal, poolBal, supply, mp, mg, mr, info, gtas, nextToken] = await Promise.all([
+  const [registryBal, bankBal, poolBal, supply, mp, mg, mr, info, gtas, nextToken, placed, burned] = await Promise.all([
     at("usdt", "balanceOf", [addr.registry]), at("usdt", "balanceOf", [addr.bank]), at("usdt", "balanceOf", [addr.challenge]),
     at("tree", "totalSupply"), at("tree", "mintedToPatrons"), at("tree", "mintedToGuardians"), at("tree", "mintedToReferrers"),
     at("tree", "editionInfo"), at("governance", "getGTAs"), at("token", "nextTokenId"),
+    at("tree", "placedLandYears"), at("tree", "burned"),
   ]);
   const held = await Promise.all([...ledger.heldFor].map((h) => at("bank", "heldForSuccessor", [h])));
   let registryHeld = 0n, bankHeld = held.reduce((x: bigint, y: bigint) => x + y, 0n), poolHeld = 0n, ok3 = true, tokens = 0;
@@ -232,10 +234,11 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
   for (const r of rows) counts[r.stage] = (counts[r.stage] ?? 0) + 1;
   let marketCap = 0n, sold = 0, soldProjected = 0n;
   for (const r of rows) if (standingSale(r)) { marketCap += r.price!; sold++; soldProjected += r.projected ?? 0n; }
-  const endsAt: bigint = info[3], landYears: bigint = info[2];
+  // editionInfo: (edition, F, land-years placed in it, its size, opened at, closes by)
+  const used: bigint = info[2], capacity: bigint = info[3];
   return {
-    t, block, rows, edition: Number(info[0]), landYears, tr3Supply: supply, gtas: gtas.length,
+    t, block, rows, edition: Number(info[0]), landYears: placed, tr3Supply: supply, gtas: gtas.length, capacity, burned,
     registryBal, bankBal, poolBal, registryHeld, bankHeld, poolHeld, inv, counts,
-    marketCap, sold, soldProjected, tillNextEdition: endsAt > landYears ? endsAt - landYears : 0n,
+    marketCap, sold, soldProjected, tillNextEdition: capacity > used ? capacity - used : 0n,
   };
 }

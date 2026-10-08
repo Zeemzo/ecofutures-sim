@@ -40,8 +40,8 @@ async function waitForChain(rpc, ms = 20000) {
 async function start() {
   const port = await freePort();
   const rpc = `http://127.0.0.1:${port}`;
-  // 1 January 2027, a block gas limit large enough to deploy the contracts, recent states in memory only
-  anvil = spawn(anvilPath(), ["--auto-impersonate", "--timestamp", "1798761600", "--port", String(port), "--gas-limit", "100000000", "--prune-history", "64", "--silent"], { stdio: "ignore" });
+  // 1 January 2026 (each run jumps to its own start), a block gas limit large enough to deploy the contracts, recent states in memory only
+  anvil = spawn(anvilPath(), ["--auto-impersonate", "--timestamp", "1767225600", "--port", String(port), "--gas-limit", "100000000", "--prune-history", "64", "--silent"], { stdio: "ignore" });
   anvil.on("error", (e) => dialog.showErrorBox("EcoFutures Simulator", `Could not start the local chain: ${e.message}`));
   await waitForChain(rpc);
 

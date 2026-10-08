@@ -89,7 +89,7 @@ async function one(c: Case, port: number) {
   mkdirSync(dir, { recursive: true });
   writeFileSync(`${dir}config.json`, JSON.stringify({ scenario: c.scenario, seed: 4, years: c.years, what: c.what }, null, 1));
   try { execSync(`lsof -ti tcp:${port} | xargs kill 2>/dev/null`); } catch {}
-  const anvil = spawn("anvil", ["--auto-impersonate", "--timestamp", "1798761600", "--port", String(port), "--gas-limit", "100000000", "--prune-history", "64", "--silent"], { stdio: "ignore" });
+  const anvil = spawn("anvil", ["--auto-impersonate", "--timestamp", "1767225600", "--port", String(port), "--gas-limit", "100000000", "--prune-history", "64", "--silent"], { stdio: "ignore" });
   await new Promise((r) => setTimeout(r, 1500));
   const rpc = `http://127.0.0.1:${port}`;
   const t0 = Date.now();

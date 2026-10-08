@@ -3,6 +3,7 @@
 import { SCENARIOS, FLOWS, KNOWN_COUNTRIES, PRODUCTION, LISTING_DAYS, POST_SALE_DAYS, MAX_FLOW_STEPS, cloneScenario, toProduction, validate, validateFlow, recordsAfterSale, type Scenario, type CountryConfig } from "./config";
 import { Step, StepName, OutcomeName } from "./model";
 import surface from "./surface.json";
+import { deploymentHtml, fillConstants } from "./review";
 
 /** Every country, ISO 3166-1: [numeric code, two letters, name]. */
 const ALL_COUNTRIES = (surface as any).countries as [number, string, string][];
@@ -13,12 +14,11 @@ type Group = { title: string; note?: string; fields: Field[] };
 const BEHAVIOUR: Group[] = [
   { title: "The run", fields: [
     { path: "behaviour.arrivalsPerYear", label: "Landowners a year", min: 0.1, max: 2000, step: 0.5 },
-    { path: "behaviour.fillLand", label: "Run until the land is full (the last edition begins)", kind: "check" },
+    { path: "behaviour.fillLand", label: "Run until the programme closes (all 21 editions)", kind: "check" },
     { path: "behaviour.arrivalYears", label: "Otherwise, years of arrivals", unit: "years", min: 0, max: 200 },
     { path: "behaviour.maxRequests", label: "At most this many requests (0 = no limit)", min: 0, max: 100000 },
     { path: "behaviour.maxTermYears", label: "Longest term a landowner asks for", unit: "years", min: 3, max: 100 },
     { path: "behaviour.governanceCalendar", label: "The governance calendar: a new Trust Admin, a freeze, a removal and replacement, a law change, a suspension, a fee change, a Council rotation", kind: "check" },
-    { path: "behaviour.overcharge", label: "Patrons overcharge with expired EFTs", kind: "check" },
   ] },
   { title: "Before the mint", note: "Percent of requests. The rest go through normally.", fields: [
     { path: "behaviour.cancelPct", label: "The guardian cancels before a verifier claims it", unit: "%" },
@@ -63,7 +63,7 @@ const CONTRACTS: Group[] = [
     { path: "contracts.taxPermille", label: "Platform tax: server + Trust Admin + review pool", unit: "per 1,000", max: 999 },
     { path: "contracts.serverPermille", label: "Of which the server", unit: "per 1,000", max: 999 },
   ] },
-  { title: "TR3 editions", note: "Land-years per F² in each edition's threshold: 1,000,000 in production, where the land needs tens of millions of covenants to reach the last edition. Smaller moves the editions sooner.", fields: [
+  { title: "TR3 editions", note: "An edition holds this many land-years (hundredths of a hectare × years) × F², and mints 10,000,000 TR3 across them: 100,000 in production, 1,000 hectare-years in edition 1. An edition not full eight protocol years after it opened closes anyway, burning what no land took. Smaller fills the editions sooner.", fields: [
     { path: "contracts.editionScale", label: "Edition scale", min: 1 },
   ] },
 ];
@@ -88,7 +88,7 @@ const STORE = "ecofutures-setup-v1";
 
 export type Choice = { scenario: Scenario; seed: number };
 
-export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, status: string) {
+export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, status: string, onBrowse: () => void = () => {}) {
   let saved: { scenario: Scenario; seed: number } | null = null;
   try { saved = JSON.parse(localStorage.getItem(STORE) ?? "null"); } catch {}
   let sc: Scenario = saved?.scenario ? saved.scenario : cloneScenario(SCENARIOS[0]);
@@ -158,14 +158,14 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
   function render() {
     const errs = validate(sc);
     const cards = SCENARIOS.map((s) => `<button type="button" class="card-s ${s.id === sc.id ? "on" : ""}" data-scenario="${s.id}"><b>${esc(s.name)}</b><span>${esc(s.summary)}</span></button>`).join("");
-    const body = tab === "behaviour" ? groups(BEHAVIOUR) + outcomes() : tab === "contracts" ? groups(CONTRACTS) : countries();
+    const body = tab === "behaviour" ? groups(BEHAVIOUR) + outcomes() : tab === "contracts" ? groups(CONTRACTS) : tab === "deploy" ? deploymentHtml(sc) : countries();
     root.innerHTML = `<div class="setup-wrap">
       <header class="setup-head"><span class="eyebrow">EcoFutures V11 · simulator</span><h1>Set up a run</h1>
         <p class="muted">The real contracts on a local chain. Choose what to investigate and adjust anything: the actors, the contracts' settings (production unless you change them) and the countries. The app deploys V11 with your configuration, admits the cast, and runs it. ${esc(status)}</p>${notice ? `<p class="notice">${esc(notice)}</p>` : ""}</header>
       <div class="setup-grid">
         <nav class="scenarios" aria-label="Scenarios">${cards}</nav>
         <section class="config">
-          <div class="tabs" role="tablist">${[["behaviour", "Behaviour"], ["contracts", "Contracts"], ["countries", `Countries (${sc.countries.length})`]].map(([k, l]) => `<button type="button" role="tab" aria-selected="${k === tab}" data-tab="${k}">${l}</button>`).join("")}</div>
+          <div class="tabs" role="tablist">${[["behaviour", "Behaviour"], ["contracts", "Contracts"], ["countries", `Countries (${sc.countries.length})`], ["deploy", "Deployment"]].map(([k, l]) => `<button type="button" role="tab" aria-selected="${k === tab}" data-tab="${k}">${l}</button>`).join("")}</div>
           <div class="panel-c">${body}</div>
         </section>
       </div>
@@ -179,6 +179,7 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
           <button type="button" id="start" class="primary" ${errs.length ? "disabled" : ""}>Deploy and set up</button></div>
         <p class="muted small" id="overlayStatus"></p>
       </footer></div>`;
+    if (tab === "deploy") void fillConstants(root, sc);
   }
 
   root.addEventListener("click", (e) => {
@@ -217,6 +218,7 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
       persist(); render();
       return;
     }
+    if (el.id === "browseContracts") { onBrowse(); return; }
     if (el.id === "resetScenario") { sc = cloneScenario(SCENARIOS.find((s) => s.id === sc.id) ?? SCENARIOS[0]); persist(); render(); return; }
     if (el.id === "exportCfg") {
       const blob = new Blob([JSON.stringify({ scenario: sc, seed }, null, 2)], { type: "application/json" });

@@ -18,12 +18,12 @@ if (!existsSync(join(v11, "foundry.toml")) || !existsSync(join(v11, "out"))) {
 const CONTRACTS = [
   ["admin", "EcoFuturesAdmin"], ["countries", "EcoCountries"], ["registry", "EcoRegistry"], ["deeds", "EcoDeeds"],
   ["core", "EcoFuturesCore"], ["bank", "EcoBank"], ["challenge", "EcoChallenge"], ["governance", "EcoFuturesGovernance"],
-  ["tree", "Tree"], ["token", "EcoFuturesToken"], ["overcharge", "EcoOvercharge"], ["lens", "EcoLens"],
+  ["tree", "Tree"], ["token", "EcoFuturesToken"], ["lens", "EcoLens"],
 ];
 const KEY_OF_INTERFACE = {
   IEcoAdmin: "admin", IEcoCountries: "countries", IEcoRegistry: "registry", IEcoDeeds: "deeds", IEcoCore: "core",
   IEcoBank: "bank", IEcoChallenge: "challenge", IEcoGovernance: "governance", ITree: "tree", IEcoTree: "tree",
-  IEcoToken: "token", IEcoOvercharge: "overcharge",
+  IEcoToken: "token",
 };
 // Plumbing every contract has: hidden unless asked for.
 const PLUMBING = new Set(["initialize", "sync", "directory", "pause", "unpause", "paused", "upgradeTo", "upgradeToAndCall",

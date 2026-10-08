@@ -9,6 +9,8 @@ export type Entry = { t: number; rid: number; cat: Category; text: string; minor
 const usd = (v: bigint) => `${money(v)} USDT`;
 const tree = (v: bigint) => `${money(v)} TREE`;
 const n = (x: unknown) => Number(x);
+/** Land-years (hundredths of a hectare × years) as hectare-years. */
+const ha = (v: bigint) => (Number(v) / 100).toLocaleString("en-US", { maximumFractionDigits: 2 });
 
 type Fmt = (a: Record<string, any>, r: string, L: Ledger) => [Category, string, boolean?] | null;
 
@@ -114,7 +116,13 @@ const FORMATS: Record<string, Fmt> = {
   "countries.SettingsApplied": (a) => ["governance",
     `${countryName(n(a.country))}'s settings change: terms ${n(a.settings.minTermYears)} to ${n(a.settings.maxTermYears)} years, for new requests.`],
 
-  // ---- TR3, resale, overcharge ----
+  // ---- editions ----
+  "tree.LandPlaced": (a, r) => ["term", `${r}'s land takes its place: ${ha(a.landYears)} ha-yr in edition ${n(a.edition)}${n(a.lastEdition) !== n(a.edition) ? `, running on into edition ${n(a.lastEdition)}` : ""}, for ${tree(a.tr3AtFullScore)} at an EcoScore of 100.`],
+  "tree.EditionClosed": (a) => ["alert", a.byClock
+    ? `Edition ${n(a.edition)}'s eight years are up with ${ha(a.landYears)} ha-yr placed: the ${tree(a.burned)} no land took are burned${n(a.edition) < 21 ? `, and edition ${n(a.edition) + 1} opens` : ", and the programme closes"}.`
+    : `Edition ${n(a.edition)} is full${n(a.edition) < 21 ? `: edition ${n(a.edition) + 1} opens` : ": the programme closes"}.`],
+
+  // ---- TR3, resale ----
   "tree.RewardClaimed": (a, r) => ["money",
     `TR3 is claimed on ${r}: ${tree(a.patronAmount)} to ${nameOf(a.patron)}, ${tree(a.guardianAmount)} to ${nameOf(a.guardian)}${a.referrerAmount > 0n ? `, ${tree(a.referrerAmount)} to ${nameOf(a.referrer)}` : ""}.`, true],
   "token.Listed": (a, r) => ["money", `${nameOf(a.seller)} lists ${r} for sale at ${usd(a.price)}.`],
@@ -124,8 +132,6 @@ const FORMATS: Record<string, Fmt> = {
   "token.Sold": (a, r) => ["money", a.byOffer
     ? `${nameOf(a.seller)} accepts ${nameOf(a.buyer)}'s offer: ${r} sold for ${usd(a.price)}.`
     : `${nameOf(a.buyer)} buys ${r} from ${nameOf(a.seller)} at the listed ${usd(a.price)}.`],
-  "overcharge.Overcharged": (a, r) => ["term",
-    `${nameOf(a.patron)} spends expired EFT #${a.fuelTokenId} to overcharge ${r}: TR3 ×${n(a.multiplier)}.`],
 };
 
 export function describe(e: Decoded, L: Ledger, seq: number, t: number): Entry | null {

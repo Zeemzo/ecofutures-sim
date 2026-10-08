@@ -1,7 +1,7 @@
 // Tests travel in time: runs a scenario with a checkpoint every month, goes back to an earlier checkpoint, lives the
 // same days again, and checks the chain and the actors arrive exactly where they were the first time.
 //
-//   anvil --auto-impersonate --timestamp 1798761600 --port 8611 --gas-limit 100000000 --prune-history 64
+//   anvil --auto-impersonate --timestamp 1767225600 --port 8611 --gas-limit 100000000 --prune-history 64
 //   RPC=http://127.0.0.1:8611 SCENARIO=fifteen YEARS=3 BACK_TO=1 ANVIL_PID=<pid> npx tsx scripts/travel.ts
 import { execSync } from "node:child_process";
 import { latestBlock, mineAt, logsBetween, prepareChain, read, sendHook } from "../src/chain";

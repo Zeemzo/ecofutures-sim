@@ -3,7 +3,7 @@ import {
   Chart, LineController, LineElement, PointElement, LinearScale, CategoryScale, Filler, Tooltip, Legend,
 } from "chart.js";
 import type { Address, Hex } from "viem";
-import { latestBlock, mineAt, logsBetween, snapshot, revertTo, read, prepareChain, blockNumber, RPC, bulk, addr, abis, sendHook } from "./chain";
+import { latestBlock, mineAt, logsBetween, snapshot, revertTo, read, prepareChain, blockNumber, RPC, bulk, addr, abis, sendHook, SETUP_LEAD } from "./chain";
 import { deploy } from "./deploy";
 import { mountSetup, type Choice } from "./setup";
 import { mountExplorer } from "./explorer";
@@ -66,7 +66,7 @@ const S = {
   openRid: 0,
   seen: new Set<number>(),
   effective: [] as { real: number; chain: number }[],
-  /** Land-years at which the last edition begins. */
+  /** The land-years all 21 editions hold. */
   fullAt: 0n,
   ended: false,
   /** The empty chain, before any deployment: every run starts from here. */
@@ -119,7 +119,8 @@ async function boot() {
     $("overlay").innerHTML = `<div class="setup-wrap"><h1>Cannot reach the local chain</h1><p class="muted">${esc(String((e as Error).message ?? e))}</p><p class="muted">Start it with ./start.sh, or open the desktop app.</p></div>`;
     return;
   }
-  S.setupUi = mountSetup($("overlay"), (c) => void setupProgramme(c), status);
+  // before a run, the contracts can be browsed: the setup screen steps aside, and Simulation brings it back
+  S.setupUi = mountSetup($("overlay"), (c) => void setupProgramme(c), status, () => { $("overlay").hidden = true; setView("explorer"); });
   // ?auto=1 sets up and plays at once; &scenario= picks one, &seed= and &speed= (an index into the speed buttons)
   const q = new URLSearchParams(location.search);
   if (q.get("auto")) {
@@ -150,6 +151,9 @@ async function setupProgramme({ scenario, seed }: Choice) {
     S.scenario = scenario;
     setYear(scenario.contracts.yearDays);
     setCountries(scenario.countries.map((c) => ({ code: c.code, name: c.name, short: c.short, flow: FLOWS.find((f) => f.id === c.flowId)?.name ?? `flow ${c.flowId}` })));
+    // the run starts now, to the second; the contracts are deployed and the cast admitted in the hour before
+    const start = Math.floor(Date.now() / 1000);
+    await mineAt(start - SETUP_LEAD);
     await deploy(scenario, (m) => ui.setStatus(`${m}…`));
     S.engine = new Engine(seed, scenario);
     S.ended = false;
@@ -164,12 +168,12 @@ async function setupProgramme({ scenario, seed }: Choice) {
     S.lastLogBlock = 0n;
     S.engine.now = (await latestBlock()).timestamp;
     await S.engine.setup((m) => ui.setStatus(`${m}…`));
-    const b = await latestBlock();
+    const b = await mineAt(start);
     S.clock = b.timestamp;
     S.chainAt = b.timestamp;
     S.engine.begin(b.timestamp);
     S.nextSample = b.timestamp;
-    S.fullAt = await read<bigint>("tree", "editionEndsAt", [LAST_EDITION - 1]);
+    S.fullAt = await read<bigint>("tree", "programmeCapacity");
     const changed = TIMINGS.filter((k) => scenario.contracts[k] !== PRODUCTION[k]).length
       + scenario.countries.filter((c) => c.listingDays !== LISTING_DAYS).length;
     $("sScale").textContent = `${scenario.name} · ${changed ? `${changed} setting${changed === 1 ? "" : "s"} changed from production` : "production settings"}`;
@@ -304,7 +308,7 @@ async function runCensus(force: boolean) {
   S.invChecks++;
   c.inv.forEach((ok, i) => { if (!ok) S.invFails[i]++; });
   if (c.edition > prevEdition) {
-    pushEntry({ t: c.t, rid: 0, cat: "alert", text: `Edition ${c.edition} begins. New covenants earn TR3 at the new edition's rate, and the land limits move.`, seq: S.seq++ });
+    pushEntry({ t: c.t, rid: 0, cat: "alert", text: `${c.edition > LAST_EDITION ? `Edition ${LAST_EDITION} closes: the programme is complete, and no more land is placed.` : `Edition ${c.edition} begins. Land placed from now earns TR3 at its rate, 10,000,000 over ${(capacityHa(c)).toLocaleString("en-US")} ha-yr, and the largest plot grows.`}`, seq: S.seq++ });
   }
   if (S.engine.finished && !S.ended) programmeOver();
   while (force || c.t >= S.nextSample) {
@@ -334,6 +338,9 @@ function sample(c: Census): Sample {
 }
 
 /** The platform's TR3 mint price: the market cap over the TR3 the sold lands will mint across their terms. */
+/** The open edition's size in hectare-years. */
+const capacityHa = (c: Census) => Math.round(Number(c.capacity) / 100);
+
 function mintPrice(c: Census): number {
   const tr3 = toUnits(c.soldProjected);
   return tr3 > 0 ? toUnits(c.marketCap) / tr3 : 0;
@@ -367,7 +374,7 @@ function render() {
 function renderClock() {
   const t = S.clock;
   const d = new Date(t * 1000);
-  $("clockDate").textContent = `${d.toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" })} ${d.toISOString().slice(11, 19)}`;
+  $("clockDate").textContent = `${d.toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" })} ${d.toISOString().slice(11, 19)} UTC`;
   const elapsed = Math.max(0, t - S.engine.start);
   const year = Math.floor(elapsed / YEAR) + 1;
   const day = Math.floor((elapsed % YEAR) / DAY) + 1;
@@ -393,8 +400,8 @@ function renderStrip() {
     const pct = Math.min(100, Number((S.census.landYears * 10000n) / S.fullAt) / 100);
     $("sLandBar").style.width = `${pct}%`;
     $("sLandText").textContent = S.engine.landFull
-      ? `Land full · edition ${S.census.edition} of ${LAST_EDITION}`
-      : `${pct < 0.1 && pct > 0 ? "<0.1" : pct.toFixed(1)}% of the land to the last edition · edition ${S.census.edition} of ${LAST_EDITION}`;
+      ? `Programme closed · all ${LAST_EDITION} editions`
+      : `${pct < 0.1 && pct > 0 ? "<0.1" : pct.toFixed(1)}% of the 21 editions' land placed · edition ${Math.min(S.census.edition, LAST_EDITION)} of ${LAST_EDITION}`;
   }
   const n = S.engine.anomalies.length;
   const a = $("sAnomalies");
@@ -418,7 +425,8 @@ function renderTicker() {
     item("Transactions", S.engine.actions.toLocaleString("en-US"), "Every transaction the actors have sent"),
     item("EFTs sold", c.sold.toLocaleString("en-US"), "EFTs sold and still standing"),
     item("TR3 minted", money(c.tr3Supply, 2), "TREE supply"),
-    item("Till next edition", `${hectareYears(c.tillNextEdition)} ha-yr`, "Hectare-years of land under covenant before the next edition begins"),
+    item("Till next edition", `${hectareYears(c.tillNextEdition)} ha-yr`, "Hectare-years of land still to place before the open edition fills; eight years after it opened it closes anyway"),
+    item("TR3 burned", money(c.burned, 2), "TR3 of editions that closed by the clock with land unplaced: burned, so each edition still accounts for its 10,000,000"),
   ].join("");
 }
 
@@ -434,7 +442,7 @@ function renderKpis() {
     [money(c.registryBal + c.bankBal + c.poolBal), "USDT held by the protocol now"],
     [`${((k.active ?? 0) + (k.blocked ?? 0) + (k.ending ?? 0)).toLocaleString("en-US")}`, "covenants in their term"],
     [money(c.tr3Supply), "TREE minted"],
-    [`${c.edition}`, `edition · ${hectareYears(c.landYears)} hectare-years taken`],
+    [`${Math.min(c.edition, LAST_EDITION)}`, `edition · ${hectareYears(c.landYears)} hectare-years placed`],
   ];
   $("kpis").innerHTML = items.map(([b, s]) => `<div class="kpi"><b>${b}</b><span>${s}</span></div>`).join("");
 }
@@ -708,7 +716,7 @@ async function renderDrawer(rid: number, force: boolean) {
   const fact = (k: string, v: string) => `<div><dt>${k}</dt><dd>${v}</dd></div>`;
   const facts = [
     fact("Land", hectares(row.land)), fact("Stated period", `${row.term} years`),
-    fact("EcoScore", row.score ? String(row.score) : "not yet"), fact("Edition", row.edition ? String(row.edition) : "at activation"),
+    fact("EcoScore", row.score ? String(row.score) : "not yet"), fact("Edition", row.edition ? String(row.edition) : "at verification"),
     fact("Guardian", esc(nameOf(row.guardian))), fact("Verifier", esc(nameOf(row.verifier))),
     fact("Owner of the EFT", row.owner ? esc(nameOf(row.owner)) : "not minted"),
     fact("Sale price", row.price ? `${money(row.price)} USDT` : "not sold"),
@@ -716,7 +724,7 @@ async function renderDrawer(rid: number, force: boolean) {
     fact("TR3 minted", `${money(L.tr3.get(rid) ?? 0n)} TREE`),
   ];
   if (row.termStart) facts.push(fact("Term", `${dateOf(row.termStart)} to ${dateOf(row.termEnd!)}`));
-  if (reward) facts.push(fact("TR3 multiplier", `×${reward.multiplier}`));
+  if (reward && reward.held > 0n) facts.push(fact("TR3 held back", `${money(reward.held)} TREE until the term ends`));
   let progress = "";
   if (row.total) {
     const pct = Math.round(((row.released ?? 0) / row.total) * 100);
@@ -787,7 +795,7 @@ function programmeOver() {
       ${item("Hectare-years", hectareYears(c.landYears))}${item("Paid to guardians", `${money(m[9] + m[4] + m[14])} USDT`)}
       ${item("Paid to verifiers", `${money(m[1] + m[6])} USDT`)}${item("TREE minted", money(c.tr3Supply))}
       ${item("Sales", `${money(m[5])} USDT`)}${item("Resales", `${money(m[17])} USDT`)}
-      ${item("Transactions", e.actions.toLocaleString("en-US"))}${item("Edition reached", `${c.edition} of ${LAST_EDITION}`)}
+      ${item("Transactions", e.actions.toLocaleString("en-US"))}${item("Edition reached", c.edition > LAST_EDITION ? `all ${LAST_EDITION} closed` : `${c.edition} of ${LAST_EDITION}`)}
     </dl></section>`;
   document.querySelector(".left")!.insertAdjacentHTML("afterbegin", html);
   pushEntry({ t: c.t, rid: 0, cat: "alert", text: "The programme is over: every covenant has run its course.", seq: S.seq++ });
@@ -977,6 +985,7 @@ function setView(v: "sim" | "explorer") {
   $("simView").hidden = v !== "sim";
   $("strip").hidden = v !== "sim";
   $("explorer").hidden = v !== "explorer";
+  if (v === "sim" && !S.ready && !S.busy) $("overlay").hidden = false;
   if (v === "explorer") {
     if (!S.explorer) S.explorer = mountExplorer($("explorer"), { ready: () => S.ready, events: () => S.raw, enqueue });
     else S.explorer.refresh();

@@ -17,7 +17,7 @@ const out = join(v11, "out");
 const names = {
   admin: "EcoFuturesAdmin", countries: "EcoCountries", registry: "EcoRegistry", deeds: "EcoDeeds",
   core: "EcoFuturesCore", bank: "EcoBank", challenge: "EcoChallenge", governance: "EcoFuturesGovernance",
-  tree: "Tree", token: "EcoFuturesToken", overcharge: "EcoOvercharge", lens: "EcoLens",
+  tree: "Tree", token: "EcoFuturesToken", lens: "EcoLens",
 };
 const abis = {};
 for (const [key, name] of Object.entries(names)) {

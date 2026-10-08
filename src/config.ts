@@ -75,7 +75,6 @@ export type Behaviour = {
   cancelOfBlockPct: number;
   resalePct: number;
   payeeSwitchPermille: number;
-  overcharge: boolean;
   governanceCalendar: boolean;
 };
 
@@ -98,7 +97,7 @@ export const FLOWS: FlowDef[] = [
 export const PRODUCTION: ContractConfig = {
   yearDays: 365, maxVerificationDelayDays: 30, acceptanceDays: 30, watchdogDays: 14, backstopDays: 14,
   minAuctionDays: 3, reviewDays: 30, responseDays: 7, panelDays: 7, redrawDays: 7, haltAfter: 3,
-  baseFee: 50, verifierPermille: 70, taxPermille: 30, serverPermille: 10, editionScale: 1_000_000,
+  baseFee: 50, verifierPermille: 70, taxPermille: 30, serverPermille: 10, editionScale: 100_000,
 };
 
 /** The contract settings production fixes: every timing, the halt threshold and the edition scale. A run may change
@@ -210,7 +209,7 @@ export const DEFAULT_BEHAVIOUR: Behaviour = {
   termOutcomes: [45, 15, 15, 15, 5, 5],
   onTimePct: 90, littleLatePct: 7,
   blockPermille: 15, cancelOfBlockPct: 25, resalePct: 4, payeeSwitchPermille: 15,
-  overcharge: true, governanceCalendar: true,
+  governanceCalendar: true,
 };
 
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x));
@@ -222,8 +221,14 @@ const onlyCountry = (code: number) => COUNTRIES_V11.map((c) => ({ ...c, weight: 
 export const SCENARIOS: Scenario[] = [
   make("fifteen", "Fifteen years of arrivals", "The batch simulation: about eight landowners a year for fifteen years, every term run to its end.",
     { arrivalYears: 15, arrivalsPerYear: 7.5 }),
-  make("fill", "Until the land is full", "Landowners keep arriving until the last edition begins; then every term runs out and the programme ends. The edition thresholds are 1/500 of production's, so the land fills in a few decades.",
-    { fillLand: true }, COUNTRIES_V11, { editionScale: 2000 }),
+  make("fill", "Until the programme closes", "Landowners keep arriving until all 21 editions are closed; then every term runs out and the programme ends. Editions are 1/1,000 of production's size, so they fill in a few decades.",
+    { fillLand: true, arrivalsPerYear: 30 }, COUNTRIES_V11, { editionScale: 100 }),
+  make("good-day", "A good day, every edition", "Nothing goes wrong: no challenges, cancellations or lapses, verifiers on time, every review window attested, every EFT sold. Landowners arrive until all 21 editions have filled, and none burns. Editions are 1/5,000 of production's size, so they fill in a few years.",
+    { fillLand: true, arrivalsPerYear: 40, cancelPct: 0, claimLapsePct: 0, abandonPct: 0, preMintChallengePct: 0, unsoldPct: 0,
+      pathBLapseNothingPct: 0, pathBLapseUnattestedPct: 0, attestPct: 100, challengePct: 0, onTimePct: 100, littleLatePct: 0,
+      blockPermille: 0, governanceCalendar: false }, COUNTRIES_V11, { editionScale: 20 }),
+  make("slow-uptake", "Slow uptake: TR3 burned", "Production editions and only three landowners a year for thirty years. The first editions fill; from then on each runs out its eight years unfilled, and the TR3 no land took is burned.",
+    { arrivalsPerYear: 3, arrivalYears: 30 }),
   make("one", "One covenant, start to finish", "A single Sri Lanka request with nothing going wrong: claim, verification, power, deed, mint, sale and every re-verification of its term. Use Next action to step through it.",
     { maxRequests: 1, arrivalsPerYear: 365, cancelPct: 0, claimLapsePct: 0, abandonPct: 0, preMintChallengePct: 0, unsoldPct: 0,
       pathBLapseNothingPct: 0, pathBLapseUnattestedPct: 0, attestPct: 100, challengePct: 0, onTimePct: 100, littleLatePct: 0, blockPermille: 0,
@@ -236,8 +241,8 @@ export const SCENARIOS: Scenario[] = [
     { arrivalYears: 8, onTimePct: 40, littleLatePct: 30, attestPct: 25, challengePct: 5 }),
   make("pathb", "Path B lapses", "Brazil only: sales held in escrow until the recording is attested, with many recordings missing or unattested.",
     { arrivalYears: 6, pathBLapseNothingPct: 30, pathBLapseUnattestedPct: 30 }, onlyCountry(76)),
-  make("edition-race", "Edition race", "Edition thresholds 1/3,333 of production's and many landowners: editions move between verification and mint, stranding requests.",
-    { fillLand: true, arrivalsPerYear: 80 }, COUNTRIES_V11, { editionScale: 300 }),
+  make("edition-race", "Edition race", "Editions 1/5,000 of production's size and many landowners: editions fill within months, and one land often runs across two or more of them.",
+    { fillLand: true, arrivalsPerYear: 80 }, COUNTRIES_V11, { editionScale: 20 }),
   make("breaches", "Breaches and cancellations", "One verification in ten finds a breach; half the blocks end in cancellation, and term challenges find the land in breach.",
     { arrivalYears: 6, blockPermille: 100, cancelOfBlockPct: 50, termOutcomes: [20, 10, 10, 50, 5, 5] }),
   make("custom", "Custom", "Start from the defaults and set everything yourself.", {}),

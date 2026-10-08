@@ -2,11 +2,11 @@
 // app's own deployer, no Foundry), then stops at midnight on each day anyone acts (at most a week apart; STEP=week for
 // a week at a time), checking the invariants every month.
 //
-//   anvil --auto-impersonate --timestamp 1798761600 --port 8546 --gas-limit 100000000 --prune-history 64
+//   anvil --auto-impersonate --timestamp 1767225600 --port 8546 --gas-limit 100000000 --prune-history 64
 //   RPC=http://127.0.0.1:8546 SCENARIO=fill SEED=1 YEARS=60 npx tsx scripts/headless.ts
 //
-// SCENARIO is a scenario id from src/config.ts; EDITION_SCALE and RATE override it.
-import { latestBlock, mineAt, logsBetween, prepareChain, timing } from "../src/chain";
+// SCENARIO is a scenario id from src/config.ts; EDITION_SCALE and RATE override it; START sets the start date.
+import { latestBlock, mineAt, logsBetween, prepareChain, timing, SETUP_LEAD } from "../src/chain";
 import { deploy } from "../src/deploy";
 import { Engine } from "../src/engine";
 import { Ledger, census, INVARIANTS } from "../src/ledger";
@@ -27,15 +27,18 @@ if (problems.length) { console.error(problems.join("\n")); process.exit(1); }
 const years = Number(process.env.YEARS ?? 60);
 const seed = Number(process.env.SEED ?? 20270101);
 
+// START (unix seconds) is when the run begins: 1 January 2027 unless given, so runs replay exactly
+const start = Number(process.env.START ?? 1798761600);
 await prepareChain();
 const t0 = performance.now();
+await mineAt(start - SETUP_LEAD);
 await deploy(sc, (m) => console.log(`  ${m}`));
 setYear(sc.contracts.yearDays);
 setCountries(sc.countries.map((c) => ({ code: c.code, name: c.name, short: c.short, flow: FLOWS.find((f) => f.id === c.flowId)?.name ?? "" })));
 const e = new Engine(seed, sc);
 const L = new Ledger();
 await e.setup((m) => console.log(`  ${m}`));
-let b = await latestBlock();
+let b = await mineAt(start);
 e.begin(b.timestamp);
 console.log(`${sc.name}: deployed and cast in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 let lastLog = 0n, checks = 0, nextMonth = b.timestamp;

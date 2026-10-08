@@ -20,7 +20,7 @@ const S = surface as unknown as { contracts: Contract[]; roles: { name: string; 
 const LIMIT = 24_576;
 const SHORT: Record<string, string> = {
   admin: "Admin", countries: "Countries", registry: "Registry", deeds: "Deeds", core: "Core", bank: "Bank",
-  challenge: "Challenge", governance: "Governance", tree: "Tree", token: "Token", overcharge: "Overcharge", lens: "Lens",
+  challenge: "Challenge", governance: "Governance", tree: "Tree", token: "Token", lens: "Lens",
 };
 
 export type ExplorerHooks = {
@@ -105,7 +105,7 @@ export function mountExplorer(root: HTMLElement, hooks: ExplorerHooks) {
 
   function graph(): string {
     const W = 980, H = 420, cx = W / 2, cy = H / 2, rx = 390, ry = 165;
-    const order: Key[] = ["admin", "countries", "registry", "deeds", "core", "bank", "challenge", "governance", "tree", "token", "overcharge", "lens"];
+    const order: Key[] = ["admin", "countries", "registry", "deeds", "core", "bank", "challenge", "governance", "tree", "token", "lens"];
     const pos = new Map(order.map((k, i) => {
       const a = (i / order.length) * Math.PI * 2 - Math.PI / 2;
       return [k, [cx + rx * Math.cos(a), cy + ry * Math.sin(a)]] as const;

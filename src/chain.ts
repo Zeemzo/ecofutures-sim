@@ -8,7 +8,7 @@ import rawAbis from "./abi.json";
 
 export type Key =
   | "admin" | "countries" | "registry" | "deeds" | "core" | "bank" | "challenge" | "governance" | "tree" | "token"
-  | "overcharge" | "lens" | "usdt";
+  | "lens" | "usdt";
 
 export const abis = rawAbis as unknown as Record<Key, Abi>;
 /** The node: ?rpc= (the desktop app passes its own anvil's), else VITE_RPC, else RPC (Node), else 8545. */
@@ -179,6 +179,12 @@ export async function latestBlock(): Promise<{ number: bigint; timestamp: number
   const b = await pub.getBlock({ blockTag: "latest" });
   return { number: b.number!, timestamp: Number(b.timestamp) };
 }
+
+// The chain begins on 1 January 2026 (anvil --timestamp 1767225600 wherever it is started), before any run's
+// start: a run jumps forward to its own start, since a chain cannot go back.
+/** The setup (deploying the contracts, admitting the cast) happens this long before a run's start, so the run begins
+ *  at its start to the second, and the editions' clock opens just before it. */
+export const SETUP_LEAD = 3600;
 
 /** Mines one block at `t`, or at the next second if the chain is already past it. Returns the block's time. */
 export async function mineAt(t: number): Promise<{ number: bigint; timestamp: number }> {

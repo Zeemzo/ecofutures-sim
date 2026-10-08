@@ -371,9 +371,30 @@ button.ghost, label.ghost { background: transparent; border: 1px solid var(--lin
 .out { margin: 0; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; font: 12px/1.5 var(--mono); max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
 .errs-list { columns: 3 220px; margin: 10px 0 0; padding-left: 18px; font-size: 12.5px; }
 
+/* the setup screen's Deployment tab: the plan, the constants, the editions */
+.table.deploy table, .table.editions table { width: 100%; }
+.table.deploy td { vertical-align: top; }
+.table.deploy td:first-child { min-width: 220px; }
+.table.deploy td b, .table.deploy td .small { display: block; }
+.table.deploy td.num { white-space: nowrap; }
+dl.given { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 0; font-size: 12.5px; }
+dl.given dt { color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+dl.given dd { margin: 0; overflow-wrap: anywhere; }
+.consts { display: grid; gap: 6px; }
+.consts details { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--surface-2); }
+.consts details[open] summary { margin-bottom: 6px; }
+.table.editions td.num { text-align: right; white-space: nowrap; }
+.table.editions tr.total td { font-weight: 600; border-top: 1px solid var(--line); }
+
 /* phones, last in the file so no general rule above overrides them */
 /* labels over their inputs where a row is too narrow for both, and each country a card of labelled fields */
 @media (max-width: 640px) {
+  .table.deploy thead { display: none; }
+  .table.deploy table, .table.deploy tbody, .table.deploy tr, .table.deploy td { display: block; }
+  .table.deploy tr { padding: 8px 4px; border-bottom: 1px solid var(--line); }
+  .table.deploy td { border: 0; padding: 3px 6px; min-width: 0; }
+  .table.deploy td.num .small { display: inline; margin-left: 8px; }
+  .table.deploy td.num b, .table.deploy td.num { display: block; }
   .panel-c { padding: 4px 14px 14px; }
   .tabs { padding: 6px 6px 0; }
   .tabs button { padding: 10px 10px; }
