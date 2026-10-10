@@ -161,8 +161,8 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
     const cards = SCENARIOS.map((s) => `<button type="button" class="card-s ${s.id === sc.id ? "on" : ""}" data-scenario="${s.id}"><b>${esc(s.name)}</b><span>${esc(s.summary)}</span></button>`).join("");
     const body = tab === "behaviour" ? groups(BEHAVIOUR) + outcomes() : tab === "contracts" ? groups(CONTRACTS) : tab === "deploy" ? deploymentHtml(sc) : countries();
     root.innerHTML = `<div class="setup-wrap">
-      <header class="setup-head"><span class="eyebrow">EcoFutures V11 · simulator</span><h1>Set up a run</h1>
-        <p class="muted">The real contracts on a local chain. Choose what to investigate and adjust anything: the actors, the contracts' settings (production unless you change them) and the countries. The app deploys V11 with your configuration, admits the cast, and runs it. ${esc(status)}</p>${notice ? `<p class="notice">${esc(notice)}</p>` : ""}</header>
+      <header class="setup-head"><span class="eyebrow">EcoFutures V12 · simulator</span><h1>Set up a run</h1>
+        <p class="muted">The real contracts on a local chain. Choose what to investigate and adjust anything: the actors, the contracts' settings (production unless you change them) and the countries. The app deploys V12 with your configuration, admits the cast, and runs it. ${esc(status)}</p>${notice ? `<p class="notice">${esc(notice)}</p>` : ""}</header>
       <div class="setup-grid">
         <nav class="scenarios" aria-label="Scenarios">${cards}</nav>
         <section class="config">

@@ -539,8 +539,9 @@ export class Engine {
       // after an upheld 1A the challenger has three days' first claim (FM p15)
       const first = getAddress(r.firstClaimant);
       let v: Address = zeroAddress;
-      if (first !== zeroAddress && t <= N(r.firstClaimUntil)) {
-        if (this.rand(10) < 7) v = first;
+      if (first !== zeroAddress && t + 3600 <= N(r.firstClaimUntil)) { // an hour's margin
+        // the challenger takes its first claim -- unless its own Trust Admin is frozen, which bars the claim
+        if (this.rand(10) < 7 && (await this.holderCan(await this.q<Address>("admin", "holderOf", [first])))) v = first;
         else { this.nextAt.set(rid, N(r.firstClaimUntil) + 1); return; }
       } else v = await this.pickVerifier(N(r.country), r.barred, zeroAddress, r.guardian);
       if (v === zeroAddress) { this.nextAt.set(rid, t + 30 * DAY); return; }
@@ -618,8 +619,11 @@ export class Engine {
     const term = N(r.termYears);
     const step = N(s.step);
     const preSale = N(s.saleAt) === 0;
-    // the paper clocks are 14 days to anchor and 30 to attest: the actors move within days
-    this.nextAt.set(rid, t + DAY + this.rand(5) * DAY);
+    // the paper clocks are 14 days to anchor and 30 to attest in production: the actors move within days, and within a
+    // third of the clock when a run shortens it
+    const k = this.sc.contracts;
+    const gap = Math.max(3600, Math.min(DAY + this.rand(5) * DAY, (Math.min(k.powerDays, k.anchoringDays, k.attestationDays) * DAY) / 3));
+    this.nextAt.set(rid, t + Math.round(gap));
     if (preSale && step !== Step.MINT && step !== Step.SALE && step !== Step.POWER && (await this.lapseIfDue(rid, t))) return;
     if (step === Step.POWER) {
       if (!holderCan) return; // waits for a successor, an unfreeze or the Council
@@ -711,13 +715,11 @@ export class Engine {
     await this.act(holder, "deeds", "drawAllowance", [BigInt(rid), amount, h("receipts", rid, what), `ipfs://receipts/${rid}`], "drawAllowance", rid);
   }
 
-  /** A starting price the Market accepts: at least the floor for its cadence (FM p8). Below USD 500 x (2T + 1) the
-   *  instalments are yearly; at or above it, twice a year, with the twice-a-year floor. */
+  /** A starting price the Market accepts: at least the yearly floor (FM p8). It is paid twice a year once it reaches
+   *  both USD 500 x (2T + 1) and the twice-a-year floor (O2), else yearly. */
   async startPrice(country: number, land: bigint, term: number): Promise<bigint> {
     const q = await read("lens", "quote", [country, land, term, 50]);
-    let price: bigint = q.priceFloor + (q.priceFloor * BigInt(this.rand(150))) / 100n;
-    if (price >= q.twiceAYearFrom && price < q.priceFloorTwice) price = q.priceFloorTwice + (q.priceFloorTwice * BigInt(this.rand(30))) / 100n;
-    return price;
+    return q.priceFloor + (q.priceFloor * BigInt(this.rand(150))) / 100n;
   }
 
   async sale(rid: number, r: any, t: number): Promise<void> {
@@ -819,6 +821,7 @@ export class Engine {
         } else if (!st.undecided) {
           const option = [Option.T3A, Option.T3B, Option.T3C, Option.T3D][this.pick(this.b.termOptions)];
           await this.raise(option, tid, rid, c.verifier, c.guardian, N(c.country));
+          st.undecided = await read<boolean>("challenge", "hasUndecidedChallenge", [tid]); // one at a time
         }
         this.windowPlan.set(tid, 0);
       } else if (wp !== 0) next = Math.min(next, this.windowActAt.get(tid)!);
@@ -873,8 +876,15 @@ export class Engine {
     }
     const windowClosed = N(w.openedAt) === 0 || t > N(w.closesAt);
     // off schedule: a newly seated verifier's first re-verification, or one option 3C made due
+    // PC2: a newly seated verifier waits for the power the covenant's Holder records for it (flows under a power)
+    let powerReady = true;
+    if (st.seat.reverifyFirst && !(await this.hasPower(rid, c.verifier))) {
+      await this.replacementPower(rid, tid, holder, holderCan);
+      powerReady = await this.hasPower(rid, c.verifier);
+      if (!powerReady) next = Math.min(next, t + 7 * DAY);
+    }
     const offSchedule = (st.seat.reverifyFirst || st.reverifyBy !== 0) && N(c.status) === CovenantStatus.ACTIVE;
-    if (!st.seat.vacant && windowClosed && !st.undecided && N(c.status) === CovenantStatus.ACTIVE) {
+    if (powerReady && !st.seat.vacant && windowClosed && !st.undecided && N(c.status) === CovenantStatus.ACTIVE) {
       if ((due !== 0 && t >= this.verifyAt.get(tid)! && t >= due) || offSchedule) {
         const late = due !== 0 && t - due > this.grace;
         if (await this.act(c.verifier, "core", "verify", [tid, this.rescore(N(c.ecoScore)), 0, ""], "verify", rid)) {
@@ -991,7 +1001,7 @@ export class Engine {
         if (N(req.status) !== RequestStatus.ENDED || N(req.endReason) !== COMPLETED) continue;
         const tid: bigint = req.tokenId;
         const c = await read("core", "getCovenant", [tid]);
-        if (N(c.status) !== CovenantStatus.ACTIVE || this.now >= N(c.termEnd)) continue;
+        if (N(c.status) !== CovenantStatus.ACTIVE || this.now + DAY >= N(c.termEnd)) continue; // a day's margin
         if (getAddress(await read<Address>("token", "ownerOf", [tid])) !== r.owner) continue;
         if ((await read("bank", "getAccount", [tid])).holds !== 0) continue;
         const [mE6, , , , commit] = await read<[bigint, bigint, bigint, bigint, bigint]>("overcharge", "quoteOvercharge", [tid, r.id]);
@@ -1045,7 +1055,7 @@ export class Engine {
   async reseat(rid: number, tid: bigint, c: any, holder: Address, holderCan: boolean, st: any) {
     const t = this.now;
     const seat = st.seat;
-    if (seat.vacant && getAddress(seat.firstClaimant) !== zeroAddress && t <= N(seat.firstClaimUntil)) {
+    if (seat.vacant && getAddress(seat.firstClaimant) !== zeroAddress && t + 3600 <= N(seat.firstClaimUntil)) { // an hour's margin
       if (this.rand(10) < 7 && await this.act(seat.firstClaimant, "parties", "claimSeat", [tid], "claimSeat", rid)) {
         this.note("reseat", rid, `${nameOf(seat.firstClaimant)}, whose challenge vacated the seat, takes #${rid} on its first claim.`);
         await this.replacementPower(rid, tid, holder, holderCan);
@@ -1069,6 +1079,13 @@ export class Engine {
       this.note("reseat", rid, `${nameOf(next)} takes the seat on #${rid}${seat.vacant ? "" : `, its verifier ${nameOf(c.verifier)} long overdue`}.`);
       await this.replacementPower(rid, tid, holder, holderCan);
     }
+  }
+
+  /** Whether the land's power names `verifier`, or the flow needs none. */
+  private async hasPower(rid: number, verifier: Address): Promise<boolean> {
+    if (!(await read("registry", "stepContext", [BigInt(rid)])).flowHasPower) return true;
+    const [v, anchoredAt, revoked] = await read<[Address, bigint, boolean]>("deeds", "powerFor", [BigInt(rid)]);
+    return getAddress(v) === getAddress(verifier) && anchoredAt !== 0n && !revoked;
   }
 
   private async replacementPower(rid: number, tid: bigint, holder: Address, holderCan: boolean) {

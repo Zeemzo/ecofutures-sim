@@ -227,7 +227,7 @@ const country = (c: Partial<CountryConfig> & Pick<CountryConfig, "code" | "name"
   holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 25, ...c,
 });
 
-export const COUNTRIES_V11: CountryConfig[] = [
+export const COUNTRIES_V12: CountryConfig[] = [
   country({ code: 144, name: "Sri Lanka", short: "LK", flowId: 1, maxTerm: 99, holders: 3, orgsPerHolder: 2, weight: 35 }),
   country({ code: 360, name: "Indonesia", short: "ID", flowId: 2, maxTerm: 29, weight: 20 }),
   country({ code: 392, name: "Japan", short: "JP", flowId: 2, weight: 20 }),
@@ -258,20 +258,20 @@ export const DEFAULT_BEHAVIOUR: Behaviour = {
 };
 
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x));
-const make = (id: string, name: string, summary: string, b: Partial<Behaviour>, countries = COUNTRIES_V11, c: Partial<ContractConfig> = {}): Scenario => ({
+const make = (id: string, name: string, summary: string, b: Partial<Behaviour>, countries = COUNTRIES_V12, c: Partial<ContractConfig> = {}): Scenario => ({
   id, name, summary, contracts: { ...PRODUCTION, ...c }, countries: clone(countries), flows: clone(FLOWS), behaviour: { ...DEFAULT_BEHAVIOUR, ...b },
 });
-const onlyCountry = (code: number) => COUNTRIES_V11.map((c) => ({ ...c, weight: c.code === code ? 100 : 0 }));
+const onlyCountry = (code: number) => COUNTRIES_V12.map((c) => ({ ...c, weight: c.code === code ? 100 : 0 }));
 
 export const SCENARIOS: Scenario[] = [
   make("fifteen", "Fifteen years of arrivals", "The batch simulation: about eight landowners a year for fifteen years, every term run to its end.",
     { arrivalYears: 15, arrivalsPerYear: 7.5 }),
   make("fill", "Until the programme closes", "Landowners keep arriving until all 21 editions are closed; then every term runs out and the programme ends. Editions are 1/1,000 of production's size, so they fill in a few decades. Plots keep production's sizes, so each land takes a large share of these small editions and many covenants reach the 1,000,000 TR3 cap: what they cannot mint is burned.",
-    { fillLand: true, arrivalsPerYear: 30 }, COUNTRIES_V11, { editionScale: 100 }),
+    { fillLand: true, arrivalsPerYear: 30 }, COUNTRIES_V12, { editionScale: 100 }),
   make("good-day", "A good day, every edition", "Nothing goes wrong: no challenges, cancellations or lapses, verifiers on time, every review window attested, every EFT sold. Landowners arrive until all 21 editions have filled, none of them by the clock. Editions are 1/5,000 of production's size, so they fill in a few years. Plots keep production's sizes, so each land takes a large share of these small editions and many covenants reach the 1,000,000 TR3 cap: what they cannot mint is burned.",
     { fillLand: true, arrivalsPerYear: 40, cancelPct: 0, claimLapsePct: 0, abandonPct: 0, preMintChallengePct: 0, unsoldPct: 0,
       pathBLapseNothingPct: 0, pathBLapseUnattestedPct: 0, attestPct: 100, challengePct: 0, onTimePct: 100, littleLatePct: 0,
-      blockPermille: 0, governanceCalendar: false, refusePct: 0, kycLatePct: 0, landSalePermille: 0 }, COUNTRIES_V11, { editionScale: 20 }),
+      blockPermille: 0, governanceCalendar: false, refusePct: 0, kycLatePct: 0, landSalePermille: 0 }, COUNTRIES_V12, { editionScale: 20 }),
   make("slow-uptake", "Slow uptake: TR3 burned", "Production editions and only three landowners a year for thirty years. The first editions fill; from then on each runs out its eight years unfilled, and the TR3 no land took is burned.",
     { arrivalsPerYear: 3, arrivalYears: 30 }),
   make("one", "One covenant, start to finish", "A single Sri Lanka request with nothing going wrong: claim, verification, power, deed, mint, sale and every re-verification of its term. Use Next action to step through it.",
@@ -287,7 +287,7 @@ export const SCENARIOS: Scenario[] = [
   make("pathb", "Path B lapses", "Brazil only: sales held in escrow until the recording is attested, with many recordings missing or unattested.",
     { arrivalYears: 6, pathBLapseNothingPct: 30, pathBLapseUnattestedPct: 30 }, onlyCountry(76)),
   make("edition-race", "Edition race", "Editions 1/5,000 of production's size and many landowners: editions fill within months, and one land often runs across two or more of them. Plots keep production's sizes, so each land takes a large share of these small editions and many covenants reach the 1,000,000 TR3 cap: what they cannot mint is burned.",
-    { fillLand: true, arrivalsPerYear: 80 }, COUNTRIES_V11, { editionScale: 20 }),
+    { fillLand: true, arrivalsPerYear: 80 }, COUNTRIES_V12, { editionScale: 20 }),
   make("breaches", "Breaches and cancellations", "One verification in ten finds a breach; half the blocks before a sale end in cancellation, and term challenges mostly allege the landowner's breach (3D).",
     { arrivalYears: 6, blockPermille: 100, cancelOfBlockPct: 50, termOutcomes: [30, 60, 5, 5], termOptions: [5, 15, 10, 70] }),
   make("custom", "Custom", "Start from the defaults and set everything yourself.", {}),

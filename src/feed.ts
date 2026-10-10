@@ -89,6 +89,7 @@ const FORMATS: Record<string, Fmt> = {
   "bank.Activated": (a, r) => ["money",
     `${r}: ${usd(a.firstInstalment)} is paid at once, ${usd(a.reviewPool)} funds the review pool, and the rest is released over ${n(a.totalReleases)} instalments, every ${Math.round(n(a.interval) / 2_629_800)} months.`, true],
   "bank.InstalmentsReleased": (a, r) => {
+    if (a.amount === 0n) return null; // the End Date with nothing left to release
     const p = a.payout;
     const what = n(a.count) === 0 ? `${r}'s first instalment is paid` : `${r} releases ${n(a.count)} instalment${n(a.count) === 1 ? "" : "s"}`;
     return ["money", `${what}: ${nameOf(p.guardian)} ${usd(p.guardianAmount)}${p.consideration > 0n ? ` (of which ${usd(p.consideration)} the annual consideration)` : ""}, ${nameOf(p.verifier)} ${usd(p.verifierFee)}, ${nameOf(p.holder)} ${usd(p.holderFee)}, the Foundation ${usd(p.foundationFee)}.`];

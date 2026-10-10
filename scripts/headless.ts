@@ -41,9 +41,10 @@ await e.setup((m) => console.log(`  ${m}`));
 let b = await mineAt(start);
 e.begin(b.timestamp);
 console.log(`${sc.name}: deployed and cast in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
-let lastLog = 0n, checks = 0, nextMonth = b.timestamp;
+let lastLog = 0n, checks = 0, nextMonth = b.timestamp, shownAnomalies = 0;
 const fails = INVARIANTS.map(() => 0);
-const end = b.timestamp + years * YEAR;
+// UNTIL=YYYY-MM-DD stops there instead, leaving the chain as it is, for a debugger
+const end = process.env.UNTIL ? Date.parse(process.env.UNTIL) / 1000 : b.timestamp + years * YEAR;
 const prof = { tick: 0, ingest: 0, census: 0, mine: 0 };
 const stamp = () => performance.now();
 // STEP=week steps a week at a time; the default stops at midnight on the next day anyone acts, at most a week on
@@ -55,6 +56,11 @@ for (let t = stepFrom(b.timestamp); t <= end && !e.finished; t = stepFrom(t)) {
   prof.mine += stamp() - s0; s0 = stamp();
   await e.tick(m.timestamp);
   prof.tick += stamp() - s0; s0 = stamp();
+  // ANOMALIES=n prints the first n unexpected reverts as they happen, with their request and date
+  while (shownAnomalies < Math.min(e.anomalies.length, Number(process.env.ANOMALIES ?? 0))) {
+    const x = e.anomalies[shownAnomalies++];
+    console.log(`  anomaly ${new Date(x.t * 1000).toISOString().slice(0, 10)} #${x.rid} ${x.label}: ${x.error}`);
+  }
   b = await latestBlock();
   for (const log of await logsBetween(lastLog + 1n, b.number)) L.ingest(log);
   lastLog = b.number;

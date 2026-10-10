@@ -412,7 +412,7 @@ function renderStrip() {
     $("sEffective").textContent = `running at ${rate >= DAY ? `${(rate / DAY).toFixed(1)} days` : rate >= 3600 ? `${(rate / 3600).toFixed(1)} hours` : `${rate.toFixed(0)} s`} per second`;
   } else $("sEffective").textContent = S.running ? "" : "paused";
   const fails = S.invFails.reduce((a, b) => a + b, 0);
-  $("sInvariants").innerHTML = `${S.invFails.map((f, i) => `<i class="${f ? "fail" : ""}" title="${esc(INVARIANTS[i])}${f ? `: failed ${f} times` : ""}"></i>`).join("")} <span>${fails ? `${fails} invariant failures` : "6 of 6 invariants held"} · ${S.invChecks.toLocaleString("en-US")} checks</span>`;
+  $("sInvariants").innerHTML = `${S.invFails.map((f, i) => `<i class="${f ? "fail" : ""}" title="${esc(INVARIANTS[i])}${f ? `: failed ${f} times` : ""}"></i>`).join("")} <span>${fails ? `${fails} invariant failures` : `${INVARIANTS.length} of ${INVARIANTS.length} invariants held`} · ${S.invChecks.toLocaleString("en-US")} checks</span>`;
   if (S.census && S.fullAt > 0n) {
     const pct = Math.min(100, Number((S.census.landYears * 10000n) / S.fullAt) / 100);
     $("sLandBar").style.width = `${pct}%`;
@@ -441,7 +441,7 @@ function renderTicker() {
     item("TR3 mint price", `${price.toFixed(4)} USDT${delta}`, "Market cap over the TR3 those lands will mint across their terms; the change is against the last monthly sample"),
     item("Transactions", S.engine.actions.toLocaleString("en-US"), "Every transaction the actors have sent"),
     item("EFTs sold", c.sold.toLocaleString("en-US"), "EFTs sold and still standing"),
-    item("TR3 minted", money(c.tr3Supply, 2), "TREE supply"),
+    item("TR3 minted", money(c.tr3Supply, 2), "TR3 supply"),
     item("Till next edition", `${hectareYears(c.tillNextEdition)} ha-yr`, "Hectare-years of land still to place before the open edition fills; eight years after it opened it closes anyway"),
     item("TR3 burned", money(c.burned, 2), "TR3 that will never be minted: room no land took when an edition closed, and what placed lands will not mint (an EcoScore below 100, the per-covenant cap, a cancellation's forfeit, a request that ended before its covenant). Each edition's 10,000,000 is minted or burned"),
   ].join("");
@@ -454,11 +454,11 @@ function renderKpis() {
   const items: [string, string][] = [
     [money(m[9] + m[4] + m[14]), "USDT paid to guardians"],
     [money(m[1] + m[6]), "USDT paid to verifiers"],
-    [money(m[7] + m[22] + m[8]), "USDT to Trust Admins and the server"],
+    [money(m[7] + m[22] + m[8]), "USDT to Trust Admins and the Foundation"],
     [money(m[2] + m[3] + m[11] + m[12] + m[13]), "USDT to attesters, panels, challengers"],
     [money(c.registryBal + c.bankBal + c.poolBal), "USDT held by the protocol now"],
     [`${((k.active ?? 0) + (k.blocked ?? 0) + (k.ending ?? 0)).toLocaleString("en-US")}`, "covenants in their term"],
-    [money(c.tr3Supply), "TREE minted"],
+    [money(c.tr3Supply), "TR3 minted"],
     [`${Math.min(c.edition, LAST_EDITION)}`, `edition · ${hectareYears(c.landYears)} hectare-years placed`],
   ];
   $("kpis").innerHTML = items.map(([b, s]) => `<div class="kpi"><b>${b}</b><span>${s}</span></div>`).join("");
@@ -543,7 +543,7 @@ function renderCharts() {
     { label: "Guardians", data: col(0), color: css("--moss") },
     { label: "Verifiers", data: col(1), color: css("--flow") },
     { label: "Trust Admins", data: col(2), color: css("--slate") },
-    { label: "Server", data: col(3), color: css("--faint") },
+    { label: "Foundation", data: col(3), color: css("--faint") },
     { label: "Attesters, panels", data: col(4), color: css("--amber") },
     { label: "Refunds", data: col(5), color: css("--rust") },
   ], true);
@@ -560,7 +560,7 @@ function renderCharts() {
     { label: "Settling", data: s.map((x) => x.states[4]), color: css("--faint") },
   ], true);
   lineChart("cTree", labels, [
-    { label: "TREE supply", data: s.map((x) => x.tr3), color: css("--moss"), fill: true },
+    { label: "TR3 supply", data: s.map((x) => x.tr3), color: css("--moss"), fill: true },
     { label: "Edition", data: s.map((x) => x.edition), color: css("--rust"), axis: "y1", stepped: true, fill: false },
   ], false, { max: 12, step: 2 });
   lineChart("cMarket", labels, [
@@ -739,10 +739,11 @@ async function renderDrawer(rid: number, force: boolean) {
     fact("Owner of the EFT", row.owner ? esc(nameOf(row.owner)) : "not minted"),
     fact("Sale price", row.price ? `${money(row.price)} USDT` : "not sold"),
     fact("Paid to the guardian", `${money(L.guardianGot.get(rid) ?? 0n)} USDT`),
-    fact("TR3 minted", `${money(L.tr3.get(rid) ?? 0n)} TREE`),
+    fact("TR3 minted", `${money(L.tr3.get(rid) ?? 0n)} TR3`),
   ];
   if (row.termStart) facts.push(fact("Term", `${dateOf(row.termStart)} to ${dateOf(row.termEnd!)}`));
-  if (reward && reward.held > 0n) facts.push(fact("TR3 held back", `${money(reward.held)} TREE until the term ends`));
+  if (reward && reward.held) facts.push(fact("TR3", "held: nothing is released until the hold lifts"));
+  if (reward && reward.mE6 > 0n) facts.push(fact("Overcharged", `M = ${(Number(reward.mE6) / 1e6).toFixed(2)}, ${money(reward.boostLeft)} TR3 of boost still to pay`));
   let progress = "";
   if (row.total) {
     const pct = Math.round(((row.released ?? 0) / row.total) * 100);
@@ -750,7 +751,8 @@ async function renderDrawer(rid: number, force: boolean) {
   }
   let windowInfo = "";
   if (w && Number(w.openedAt) !== 0) {
-    windowInfo = `<p class="small">${w.settled ? "The last review window has settled." : `A review window is open until ${dateOf(Number(w.closesAt))}${!/^0x0+$/.test(w.attestor) ? `, attested by ${esc(nameOf(w.attestor))}` : ""}.`}</p>`;
+    const attested = !/^0x0+$/.test(w.attestor) ? `, attested by ${esc(nameOf(w.attestor))}` : ", not attested";
+    windowInfo = `<p class="small">${S.clock <= Number(w.closesAt) ? `A review window is open until ${dateOf(Number(w.closesAt))}${attested}.` : `The last review window closed on ${dateOf(Number(w.closesAt))}${attested}.`}</p>`;
   }
   if (ch) windowInfo += `<p class="small">Challenge (${OptionName[Number(ch.option)]}): ${esc(nameOf(ch.challenger))} against ${esc(nameOf(ch.defendant))}. Panel: ${(ch.panel as string[]).filter((p) => !/^0x0+$/.test(p)).map((p) => esc(nameOf(p))).join(", ") || "not yet drawn"}.</p>`;
   const premint = row.status === RequestStatus.VERIFIED;
@@ -813,7 +815,7 @@ function programmeOver() {
       ${item("Requests", rows.length.toLocaleString("en-US"))}${item("Terms completed", completed.toLocaleString("en-US"))}
       ${item("Ended early", (rows.length - completed).toLocaleString("en-US"))}${item("Land under covenant", hectares(land))}
       ${item("Hectare-years", hectareYears(c.landYears))}${item("Paid to guardians", `${money(m[9] + m[4] + m[14])} USDT`)}
-      ${item("Paid to verifiers", `${money(m[1] + m[6])} USDT`)}${item("TREE minted", money(c.tr3Supply))}
+      ${item("Paid to verifiers", `${money(m[1] + m[6])} USDT`)}${item("TR3 minted", money(c.tr3Supply))}
       ${item("Sales", `${money(m[5])} USDT`)}${item("Resales", `${money(m[17])} USDT`)}
       ${item("Transactions", e.actions.toLocaleString("en-US"))}${item("Edition reached", c.edition > LAST_EDITION ? `all ${LAST_EDITION} closed` : `${c.edition} of ${LAST_EDITION}`)}
     </dl></section>`;

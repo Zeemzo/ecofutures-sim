@@ -1,4 +1,4 @@
-// The contract explorer: every contract, function, event and error of V11, generated from the compiled contracts
+// The contract explorer: every contract, function, event and error of V12, generated from the compiled contracts
 // (scripts/surface.mjs), with the calls between them, who may call what, and a form to call any function live
 // against the run's chain -- reads as they are, writes as any actor in the cast.
 import { getAddress, isAddress, keccak256, toBytes, type Address } from "viem";

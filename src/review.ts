@@ -40,7 +40,7 @@ export function deploymentHtml(sc: Scenario): string {
   return `<fieldset><legend>What will be deployed</legend>
     <p class="note">From anvil's first account, each contract behind an ERC-1967 proxy that trusts the forwarder for gasless calls, in this order, with these values (they follow your settings). Then the Admin's directory is set and every contract syncs to it.</p>
     <div class="table deploy"><table><thead><tr><th>Contract</th><th>Size</th><th>Initialised with</th></tr></thead><tbody>${rows}</tbody></table></div>
-    <p class="note">Before them: a test USDT as the settlement currency, and the forwarder. After them: EcoLens (read-only views, given the Admin's address); the server role; the Council, three GTAs seated; ${flows} flow${flows === 1 ? "" : "s"} defined; ${countries} countr${countries === 1 ? "y" : "ies"} enabled with the settings on the Countries tab; then the cast admitted.</p>
+    <p class="note">Before them: a test USDT as the settlement currency, and the forwarder. After them: EcoLens (read-only views, given the Admin's address); the server and emergency roles; the clocks; the Council, three GTAs seated after their identity checks; ${flows} flow${flows === 1 ? "" : "s"} defined; ${countries} countr${countries === 1 ? "y" : "ies"} enabled with the settings on the Countries tab; then the cast admitted.</p>
     <div class="row"><button type="button" id="browseContracts" class="ghost">Browse every function, event and error</button></div>
   </fieldset>
   <fieldset><legend>Constants in the code</legend>
