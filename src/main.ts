@@ -15,8 +15,8 @@ import { Ledger, census, resetCensus, INVARIANTS, standingSale, type Census, typ
 import { describe, type Entry, type Category } from "./feed";
 import { Timeline, nextStop } from "./travel";
 import {
-  DAY, YEAR, COUNTRIES, StepName, EndReason, Outcome, OutcomeName, nameOf, money, dateOf, shortDate, hectares,
-  countryName, toUnits, resetNames, RequestStatus, setYear, setCountries, knownActors, CovenantStatus,
+  DAY, YEAR, COUNTRIES, StepName, EndReason, OutcomeName, nameOf, money, dateOf, shortDate, hectares,
+  countryName, toUnits, resetNames, RequestStatus, setYear, setCountries, knownActors, CovenantStatus, OptionName,
 } from "./model";
 
 Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
@@ -725,7 +725,8 @@ async function renderDrawer(rid: number, force: boolean) {
   let reward: any = null, w: any = null, ch: any = null;
   if (row.tokenId) {
     [reward, w] = await Promise.all([read("tree", "rewardOf", [row.tokenId]), read("challenge", "getWindow", [row.tokenId])]);
-    if (row.challenged && w.challengeId) ch = await read("challenge", "getChallenge", [w.challengeId]);
+    const open = row.challenged ? await read<bigint>("challenge", "openChallengeOf", [row.tokenId]) : 0n;
+    if (open !== 0n) ch = await read("challenge", "getChallenge", [open]);
   }
   if (S.openRid !== rid) return;
   $("dEyebrow").textContent = `${countryName(row.country)} · ${stageLabel(row.stage)}`;
@@ -749,14 +750,14 @@ async function renderDrawer(rid: number, force: boolean) {
   }
   let windowInfo = "";
   if (w && Number(w.openedAt) !== 0) {
-    windowInfo = `<p class="small">${w.settled ? "The last review window has settled." : `A review window is open until ${dateOf(Number(w.closesAt))}${Number(w.action) === 1 ? `, attested by ${esc(nameOf(w.attestor))}` : Number(w.action) === 2 ? ", challenged" : ""}.`}</p>`;
+    windowInfo = `<p class="small">${w.settled ? "The last review window has settled." : `A review window is open until ${dateOf(Number(w.closesAt))}${!/^0x0+$/.test(w.attestor) ? `, attested by ${esc(nameOf(w.attestor))}` : ""}.`}</p>`;
   }
-  if (ch) windowInfo += `<p class="small">Challenge ${w.challengeId}: ${esc(nameOf(ch.challenger))} against ${esc(nameOf(ch.defendant))}. Panel: ${(ch.panel as string[]).filter((p) => !/^0x0+$/.test(p)).map((p) => esc(nameOf(p))).join(", ") || "not yet drawn"}.</p>`;
+  if (ch) windowInfo += `<p class="small">Challenge (${OptionName[Number(ch.option)]}): ${esc(nameOf(ch.challenger))} against ${esc(nameOf(ch.defendant))}. Panel: ${(ch.panel as string[]).filter((p) => !/^0x0+$/.test(p)).map((p) => esc(nameOf(p))).join(", ") || "not yet drawn"}.</p>`;
   const premint = row.status === RequestStatus.VERIFIED;
-  const canChallenge = premint || (row.tokenId && w && Number(w.openedAt) !== 0 && !w.settled && Number(w.action) === 0 && S.clock <= Number(w.closesAt));
+  const canChallenge = premint || (row.tokenId && w && Number(w.openedAt) !== 0 && S.clock <= Number(w.closesAt));
   const isTerm = row.stage === "active" || row.stage === "ending";
   const acts = `<div class="acts"><h3>Step in</h3>
-    <div class="row"><select id="dOutcome">${OutcomeName.map((o, i) => (premint && i === Outcome.BREACH ? "" : `<option value="${i}">Panel finds: ${o}</option>`)).join("")}</select>
+    <div class="row"><select id="dOutcome">${OutcomeName.map((o, i) => `<option value="${i}">Panel finds: ${o}</option>`).join("")}</select>
     <button type="button" id="dChallenge" ${canChallenge ? "" : "disabled"}>Raise a challenge</button></div>
     ${canChallenge ? "" : `<span class="small muted">${row.tokenId ? "A challenge needs an open review window: one opens with each re-verification." : "A challenge is possible in the watchdog window after the verification."}</span>`}
     <div class="row"><button type="button" id="dBlock" ${isTerm || row.stage === "for-sale" ? "" : "disabled"}>The verifier blocks it</button>

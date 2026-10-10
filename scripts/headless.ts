@@ -1,4 +1,4 @@
-// Runs a scenario without the browser on a fresh anvil node: deploys V11 with the scenario's configuration (the
+// Runs a scenario without the browser on a fresh anvil node: deploys V12 with the scenario's configuration (the
 // app's own deployer, no Foundry), then stops at midnight on each day anyone acts (at most a week apart; STEP=week for
 // a week at a time), checking the invariants every month.
 //
@@ -42,7 +42,7 @@ let b = await mineAt(start);
 e.begin(b.timestamp);
 console.log(`${sc.name}: deployed and cast in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 let lastLog = 0n, checks = 0, nextMonth = b.timestamp;
-const fails = [0, 0, 0, 0, 0, 0];
+const fails = INVARIANTS.map(() => 0);
 const end = b.timestamp + years * YEAR;
 const prof = { tick: 0, ingest: 0, census: 0, mine: 0 };
 const stamp = () => performance.now();
@@ -65,7 +65,11 @@ for (let t = stepFrom(b.timestamp); t <= end && !e.finished; t = stepFrom(t)) {
     const c = await census(e.requests, e.done, L, b.number, b.timestamp);
     prof.census += stamp() - s1;
     checks++;
-    c.inv.forEach((ok, i) => { if (!ok) { fails[i]++; console.log(`  invariant ${i + 1} failed at ${new Date(b.timestamp * 1000).toISOString().slice(0, 10)}: ${INVARIANTS[i]}`); } });
+    c.inv.forEach((ok, i) => {
+      if (ok) return;
+      fails[i]++;
+      if (fails[i] <= 3) console.log(`  invariant ${i + 1} failed at ${new Date(b.timestamp * 1000).toISOString().slice(0, 10)}: ${INVARIANTS[i]}${i === 3 ? ` (${c.bad.slice(0, 3).join("; ") || `tokens ${c.rows.filter((r) => r.tokenId).length}`})` : ""}`);
+    });
     if (checks % 12 === 0) {
       console.log(`${new Date(b.timestamp * 1000).toISOString().slice(0, 10)}  requests ${e.requests.length}  done ${e.done.size}  actions ${e.actions}  anomalies ${e.anomalies.length}  edition ${c.edition}  ${Math.round((performance.now() - t0) / 1000)}s`);
     }
@@ -74,6 +78,17 @@ for (let t = stepFrom(b.timestamp); t <= end && !e.finished; t = stepFrom(t)) {
 console.log(`\n${sc.name}, seed ${seed}: ${e.requests.length} requests, ${e.done.size} finished, finished=${e.finished}, ${e.actions} actions, ${checks} checks, ${new Date(b.timestamp * 1000).toISOString().slice(0, 10)}`);
 if (e.landFull) console.log(`land full in ${((e.landFullAt - e.start) / YEAR).toFixed(1)} years`);
 console.log(`invariant failures: ${fails.join(", ")}`);
+// what is still open when the run stops, and why
+for (const rid of e.requests.filter((r) => !e.done.has(r)).slice(0, 5)) {
+  const { read } = await import("../src/chain");
+  const r = await read("registry", "getRequest", [BigInt(rid)]);
+  const c = r.tokenId !== 0n ? await read("core", "getCovenant", [r.tokenId]) : null;
+  const a = r.tokenId !== 0n ? await read("bank", "getAccount", [r.tokenId]) : null;
+  console.log(`  open #${rid}: request status ${r.status}, end ${r.endReason}; covenant status ${c?.status}, block ${c?.blockReason}, `
+    + `verified ${c?.verifiedThrough} of ${a?.totalReleases}, released ${a?.released}, holds ${a?.holds}, `
+    + `term ${c ? new Date(Number(c.termStart) * 1000).toISOString().slice(0, 10) : "-"} to ${c ? new Date(Number(c.termEnd) * 1000).toISOString().slice(0, 10) : "-"}, `
+    + `next visit ${new Date((e.nextAt.get(rid) ?? 0) * 1000).toISOString().slice(0, 10)}`);
+}
 console.log(`anomalies: ${e.anomalies.length}`);
 const by: Record<string, number> = {};
 for (const a of e.anomalies) by[`${a.label}: ${a.error}`] = (by[`${a.label}: ${a.error}`] ?? 0) + 1;

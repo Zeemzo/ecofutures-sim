@@ -7,8 +7,8 @@ import { foundry } from "viem/chains";
 import rawAbis from "./abi.json";
 
 export type Key =
-  | "admin" | "countries" | "registry" | "deeds" | "core" | "bank" | "challenge" | "governance" | "tree" | "token"
-  | "lens" | "usdt";
+  | "admin" | "countries" | "registry" | "deeds" | "core" | "bank" | "market" | "parties" | "challenge" | "governance"
+  | "tree" | "token" | "overcharge" | "lens" | "usdt";
 
 export const abis = rawAbis as unknown as Record<Key, Abi>;
 /** The node: ?rpc= (the desktop app passes its own anvil's), else VITE_RPC, else RPC (Node), else 8545. */

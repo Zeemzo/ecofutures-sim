@@ -4,22 +4,39 @@ import { Step } from "./model";
 
 export type ContractConfig = {
   yearDays: number;
+  /** The grace after a re-verification falls due (decided 9 Oct: 14 days). */
   maxVerificationDelayDays: number;
   acceptanceDays: number;
   watchdogDays: number;
-  backstopDays: number;
   minAuctionDays: number;
+  /** The winner of an auction passes its identity check within this, or the sale is called off. */
+  kycDays: number;
   reviewDays: number;
   responseDays: number;
   panelDays: number;
   redrawDays: number;
   haltAfter: number;
+  // the paper flow (EcoDeeds): the power, anchoring and attestation clocks, the Holder's 3 days to decide an
+  // extension, a GTA's backstop and the landowner's own anchoring
+  powerDays: number;
+  anchoringDays: number;
+  attestationDays: number;
+  decisionDays: number;
+  gtaAttestFromDays: number;
+  guardianAnchorFromDays: number;
+  // the term (Core) and the parties (EcoParties)
+  restoreDays: number;
+  damageDays: number;
+  firstClaimDays: number;
+  reseatDays: number;
+  accessionDays: number;
   /** V, the default base fee, in USDT. */
   baseFee: number;
   verifierPermille: number;
   taxPermille: number;
-  serverPermille: number;
-  /** Land-years per F² in the edition thresholds; 1,000,000 in production. */
+  /** The Foundation's fee wallet: its share of each instalment. */
+  foundationPermille: number;
+  /** Land-years per F² in the edition thresholds: 100,000 in production (1,000 hectare-years). */
   editionScale: number;
 };
 
@@ -35,8 +52,7 @@ export type CountryConfig = {
   listingDays: number;
   postSaleDays: number;
   baseFee: number;       // USDT; 0 = the protocol default V
-  attestationFee: number;
-  judgmentFee: number;
+  deskRate: number;      // USDT; 0 = V x 4/50
   holders: number;       // Trust Admins
   orgsPerHolder: number;
   verifiersPerOrg: number;
@@ -44,6 +60,16 @@ export type CountryConfig = {
 };
 
 export type Behaviour = {
+  /** Percent of requests whose landowner refuses to sign the Deed (the verifier keeps its fee). */
+  refusePct: number;
+  /** Percent of auction winners who have not passed the identity check when they win; of those, how many fail. */
+  kycLatePct: number;
+  kycFailPct: number;
+  /** Per thousand verifications, the land is sold (the buyer accedes, or not, to the Grantor Agreement). */
+  landSalePermille: number;
+  accedePct: number;
+  /** Percent of ended EFTs whose owner applies its Relic to a later EFT it owns. */
+  relicUsePct: number;
   arrivalsPerYear: number;
   /** Stop admitting landowners when the last edition begins. */
   fillLand: boolean;
@@ -63,16 +89,21 @@ export type Behaviour = {
   // each review window: an independent verifier attests, or challenges; otherwise nobody acts
   attestPct: number;
   challengePct: number;
-  // what panels find, as weights: dismiss, score, documents, breach, lapse, withdraw
+  // what panels find, as weights: dismiss, uphold, lapse, withdraw
   preMintOutcomes: number[];
   termOutcomes: number[];
+  /** Which option a term challenge raises, as weights: 3A, 3B, 3C, 3D. */
+  termOptions: number[];
   // verifiers: percent on time (0-20 days after due), a little late (20-28), very late (40-60)
   onTimePct: number;
   littleLatePct: number;
   /** Per thousand re-verifications, the verifier blocks the covenant for a breach. */
   blockPermille: number;
-  /** Percent of blocks that end in cancellation rather than an unblock. */
+  /** Of blocks before the sale, percent cancelled rather than unblocked. In the term a breach is never cancelled
+   *  (FM P7): the verifier cures it by re-verifying, or the landowner challenges the block (3E). */
   cancelOfBlockPct: number;
+  /** Of blocks in the term, percent the landowner challenges as wrong (3E). */
+  wrongBlockPct: number;
   resalePct: number;
   payeeSwitchPermille: number;
   governanceCalendar: boolean;
@@ -91,25 +122,31 @@ export type Scenario = {
 export const FLOWS: FlowDef[] = [
   { id: 1, name: "Path A under a power", steps: [Step.POWER, Step.POWER_ANCHOR, Step.DEED, Step.ATTEST, Step.MINT, Step.SALE] },
   { id: 2, name: "Path A", steps: [Step.DEED, Step.ATTEST, Step.MINT, Step.SALE] },
-  { id: 3, name: "Path B: escrow until recorded", steps: [Step.DEED, Step.ATTEST, Step.MINT, Step.SALE, Step.RECORDING, Step.ATTEST] },
+  // path B as Ravi corrected it on 9 Oct: the Holder's power, the agreement to grant attested before the mint, the
+  // Deed recorded after the sale and attested
+  { id: 3, name: "Path B: escrow until recorded", steps: [Step.POWER, Step.POWER_ANCHOR, Step.AGREEMENT, Step.ATTEST, Step.MINT, Step.SALE, Step.RECORDING, Step.ATTEST] },
 ];
 
 export const PRODUCTION: ContractConfig = {
-  yearDays: 365, maxVerificationDelayDays: 30, acceptanceDays: 30, watchdogDays: 14, backstopDays: 14,
-  minAuctionDays: 3, reviewDays: 30, responseDays: 7, panelDays: 7, redrawDays: 7, haltAfter: 3,
-  baseFee: 50, verifierPermille: 70, taxPermille: 30, serverPermille: 10, editionScale: 100_000,
+  yearDays: 365, maxVerificationDelayDays: 14, acceptanceDays: 30, watchdogDays: 21, minAuctionDays: 3, kycDays: 30,
+  reviewDays: 30, responseDays: 7, panelDays: 7, redrawDays: 7, haltAfter: 3,
+  powerDays: 14, anchoringDays: 14, attestationDays: 30, decisionDays: 3, gtaAttestFromDays: 21, guardianAnchorFromDays: 7,
+  restoreDays: 60, damageDays: 14, firstClaimDays: 3, reseatDays: 30, accessionDays: 180,
+  baseFee: 50, verifierPermille: 70, taxPermille: 30, foundationPermille: 10, editionScale: 100_000,
 };
 
 /** The contract settings production fixes: every timing, the halt threshold and the edition scale. A run may change
  *  them; the setup screen shows production's value beside any that differs. */
 export const TIMINGS: (keyof ContractConfig)[] = [
-  "yearDays", "acceptanceDays", "watchdogDays", "backstopDays", "minAuctionDays", "reviewDays", "maxVerificationDelayDays",
-  "responseDays", "panelDays", "redrawDays", "haltAfter", "editionScale",
+  "yearDays", "acceptanceDays", "watchdogDays", "minAuctionDays", "kycDays", "reviewDays", "maxVerificationDelayDays",
+  "responseDays", "panelDays", "redrawDays", "haltAfter", "powerDays", "anchoringDays", "attestationDays", "decisionDays",
+  "gtaAttestFromDays", "guardianAnchorFromDays", "restoreDays", "damageDays", "firstClaimDays", "reseatDays",
+  "accessionDays", "editionScale",
 ];
-/** A country's listing window (Covenant Lifecycle v5 §5: 330 days in every country). */
-export const LISTING_DAYS = 330;
-/** A path B country's post-sale window: no document sets it yet. */
-export const POST_SALE_DAYS = 60;
+/** A country's listing window (Flow Map v25: 358 days). */
+export const LISTING_DAYS = 358;
+/** A path B country's recording window: 30 days from the sale (Flow Map v25, p5). */
+export const POST_SALE_DAYS = 30;
 
 /** A flow with steps after the sale holds the price in escrow until they are done: its country needs a post-sale window. */
 export const recordsAfterSale = (flows: FlowDef[], flowId: number) => {
@@ -180,7 +217,7 @@ export function toProduction(s: Scenario): string[] {
 }
 
 const country = (c: Partial<CountryConfig> & Pick<CountryConfig, "code" | "name" | "short" | "flowId">): CountryConfig => ({
-  minTerm: 3, maxTerm: 100, listingDays: 330, postSaleDays: 0, baseFee: 0, attestationFee: 5, judgmentFee: 9,
+  minTerm: 3, maxTerm: 100, listingDays: LISTING_DAYS, postSaleDays: 0, baseFee: 0, deskRate: 0,
   holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 25, ...c,
 });
 
@@ -188,7 +225,7 @@ export const COUNTRIES_V11: CountryConfig[] = [
   country({ code: 144, name: "Sri Lanka", short: "LK", flowId: 1, maxTerm: 99, holders: 3, orgsPerHolder: 2, weight: 35 }),
   country({ code: 360, name: "Indonesia", short: "ID", flowId: 2, maxTerm: 29, weight: 20 }),
   country({ code: 392, name: "Japan", short: "JP", flowId: 2, weight: 20 }),
-  country({ code: 76, name: "Brazil", short: "BR", flowId: 3, minTerm: 16, postSaleDays: 60, weight: 25 }),
+  country({ code: 76, name: "Brazil", short: "BR", flowId: 3, minTerm: 16, postSaleDays: POST_SALE_DAYS, weight: 25 }),
 ];
 
 /** Countries a user can add by ISO code, with their names. Any other code is accepted too. */
@@ -201,12 +238,14 @@ export const KNOWN_COUNTRIES: Record<number, [string, string]> = {
 };
 
 export const DEFAULT_BEHAVIOUR: Behaviour = {
+  refusePct: 2, kycLatePct: 10, kycFailPct: 20, landSalePermille: 10, accedePct: 80, relicUsePct: 50,
+  termOptions: [15, 35, 20, 30], wrongBlockPct: 25,
   arrivalsPerYear: 20, fillLand: false, arrivalYears: 15, maxRequests: 0, maxTermYears: 25,
   cancelPct: 2, claimLapsePct: 2, abandonPct: 2, preMintChallengePct: 14, unsoldPct: 4,
   pathBLapseNothingPct: 8, pathBLapseUnattestedPct: 6,
   attestPct: 72, challengePct: 8,
-  preMintOutcomes: [35, 20, 20, 0, 13, 12],
-  termOutcomes: [45, 15, 15, 15, 5, 5],
+  preMintOutcomes: [45, 30, 13, 12],
+  termOutcomes: [50, 35, 8, 7],
   onTimePct: 90, littleLatePct: 7,
   blockPermille: 15, cancelOfBlockPct: 25, resalePct: 4, payeeSwitchPermille: 15,
   governanceCalendar: true,
@@ -226,15 +265,15 @@ export const SCENARIOS: Scenario[] = [
   make("good-day", "A good day, every edition", "Nothing goes wrong: no challenges, cancellations or lapses, verifiers on time, every review window attested, every EFT sold. Landowners arrive until all 21 editions have filled, none of them by the clock. Editions are 1/5,000 of production's size, so they fill in a few years. Plots keep production's sizes, so each land takes a large share of these small editions and many covenants reach the 1,000,000 TR3 cap: what they cannot mint is burned.",
     { fillLand: true, arrivalsPerYear: 40, cancelPct: 0, claimLapsePct: 0, abandonPct: 0, preMintChallengePct: 0, unsoldPct: 0,
       pathBLapseNothingPct: 0, pathBLapseUnattestedPct: 0, attestPct: 100, challengePct: 0, onTimePct: 100, littleLatePct: 0,
-      blockPermille: 0, governanceCalendar: false }, COUNTRIES_V11, { editionScale: 20 }),
+      blockPermille: 0, governanceCalendar: false, refusePct: 0, kycLatePct: 0, landSalePermille: 0 }, COUNTRIES_V11, { editionScale: 20 }),
   make("slow-uptake", "Slow uptake: TR3 burned", "Production editions and only three landowners a year for thirty years. The first editions fill; from then on each runs out its eight years unfilled, and the TR3 no land took is burned.",
     { arrivalsPerYear: 3, arrivalYears: 30 }),
   make("one", "One covenant, start to finish", "A single Sri Lanka request with nothing going wrong: claim, verification, power, deed, mint, sale and every re-verification of its term. Use Next action to step through it.",
     { maxRequests: 1, arrivalsPerYear: 365, cancelPct: 0, claimLapsePct: 0, abandonPct: 0, preMintChallengePct: 0, unsoldPct: 0,
       pathBLapseNothingPct: 0, pathBLapseUnattestedPct: 0, attestPct: 100, challengePct: 0, onTimePct: 100, littleLatePct: 0, blockPermille: 0,
-      resalePct: 0, payeeSwitchPermille: 0, governanceCalendar: false, maxTermYears: 5 }, onlyCountry(144)),
+      resalePct: 0, payeeSwitchPermille: 0, governanceCalendar: false, maxTermYears: 5, refusePct: 0, kycLatePct: 0, landSalePermille: 0 }, onlyCountry(144)),
   make("challenges", "Challenge stress", "Half of all verifications challenged before the mint and two in five review windows challenged in the term, with every outcome equally likely.",
-    { arrivalYears: 6, preMintChallengePct: 50, attestPct: 40, challengePct: 40, preMintOutcomes: [1, 1, 1, 0, 1, 1], termOutcomes: [1, 1, 1, 1, 1, 1] }),
+    { arrivalYears: 6, preMintChallengePct: 50, attestPct: 40, challengePct: 40, preMintOutcomes: [1, 1, 1, 1], termOutcomes: [1, 1, 1, 1], termOptions: [1, 1, 1, 1] }),
   make("holder-failure", "Trust Admin failure", "The governance calendar compressed: a Trust Admin frozen, one removed and replaced, a country suspended, a power revoked, all while covenants are in flight.",
     { arrivalYears: 8, arrivalsPerYear: 30 }),
   make("late", "Late and absent verifiers", "Verifiers late half the time and attestors rarely acting: reseats, unattested runs and release halts.",
@@ -243,8 +282,8 @@ export const SCENARIOS: Scenario[] = [
     { arrivalYears: 6, pathBLapseNothingPct: 30, pathBLapseUnattestedPct: 30 }, onlyCountry(76)),
   make("edition-race", "Edition race", "Editions 1/5,000 of production's size and many landowners: editions fill within months, and one land often runs across two or more of them. Plots keep production's sizes, so each land takes a large share of these small editions and many covenants reach the 1,000,000 TR3 cap: what they cannot mint is burned.",
     { fillLand: true, arrivalsPerYear: 80 }, COUNTRIES_V11, { editionScale: 20 }),
-  make("breaches", "Breaches and cancellations", "One verification in ten finds a breach; half the blocks end in cancellation, and term challenges find the land in breach.",
-    { arrivalYears: 6, blockPermille: 100, cancelOfBlockPct: 50, termOutcomes: [20, 10, 10, 50, 5, 5] }),
+  make("breaches", "Breaches and cancellations", "One verification in ten finds a breach; half the blocks before a sale end in cancellation, and term challenges mostly allege the landowner's breach (3D).",
+    { arrivalYears: 6, blockPermille: 100, cancelOfBlockPct: 50, termOutcomes: [30, 60, 5, 5], termOptions: [5, 15, 10, 70] }),
   make("custom", "Custom", "Start from the defaults and set everything yourself.", {}),
 ];
 
@@ -259,14 +298,14 @@ export function validate(s: Scenario): string[] {
   const e: string[] = [];
   const c = s.contracts;
   if (c.verifierPermille + c.taxPermille >= 1000) e.push("The verifier's share and the platform tax must leave the guardian something.");
-  if (c.serverPermille >= c.taxPermille) e.push("The server fee must be less than the platform tax.");
+  if (c.foundationPermille >= c.taxPermille) e.push("The Foundation's share must be less than the platform tax.");
   if (c.yearDays < 2) e.push("The protocol year must be at least 2 days.");
   if (Math.abs(c.yearDays * 86400 - Math.round(c.yearDays * 86400)) > 1e-6) e.push("The protocol year must be a whole number of seconds (365.25 days is; 365.3 is not).");
   if (c.reviewDays * 2 > c.yearDays) e.push("The review window must be shorter than half a year: a covenant re-verifies twice a year at 0.5 ha and above.");
-  if (c.maxVerificationDelayDays < c.reviewDays) e.push("The maximum verification delay must be at least the review window.");
   if (c.haltAfter < 1) e.push("Releases halt after at least one unattested window.");
   if (c.editionScale < 1) e.push("The edition scale must be at least 1.");
-  for (const k of ["acceptanceDays", "watchdogDays", "backstopDays", "minAuctionDays", "reviewDays", "responseDays", "panelDays", "redrawDays"] as const)
+  for (const k of ["acceptanceDays", "watchdogDays", "minAuctionDays", "kycDays", "reviewDays", "responseDays", "panelDays", "redrawDays",
+    "powerDays", "anchoringDays", "attestationDays", "decisionDays", "restoreDays", "damageDays", "firstClaimDays", "reseatDays", "accessionDays"] as const)
     if (!(c[k] > 0)) e.push(`${k} must be more than 0 days.`);
   const ids = new Set<number>();
   for (const f of s.flows) {
@@ -286,6 +325,7 @@ export function validate(s: Scenario): string[] {
     if (!(k.listingDays > 0)) e.push(`${k.name}: the listing window must be more than 0 days.`);
     if (f && recordsAfterSale(s.flows, k.flowId) && k.postSaleDays <= 0) e.push(`${k.name}: its flow records after the sale, so it needs a post-sale window.`);
     if (k.holders < 1 || k.orgsPerHolder < 1 || k.verifiersPerOrg < 1) e.push(`${k.name}: needs at least one Trust Admin, organisation and verifier.`);
+    if (k.holders * k.orgsPerHolder < 2) e.push(`${k.name}: needs two verifier organisations before its first verification (Flow Map p6).`);
   }
   if (!s.countries.some((k) => k.weight > 0)) e.push("At least one country must receive arrivals.");
   return e;

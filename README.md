@@ -1,7 +1,7 @@
-# EcoFutures V11 — simulator
+# EcoFutures — simulator (V12)
 
-The whole V11 protocol on a local anvil chain. You choose what to investigate and how the contracts are configured
-(production's settings unless you change them); the app deploys V11, admits the cast, and runs it. Landowners,
+The whole V12 protocol on a local anvil chain. You choose what to investigate and how the contracts are configured
+(production's settings unless you change them); the app deploys V12, admits the cast, and runs it. Landowners,
 verifiers, Trust Admins, patrons, the server and the Council act on their own; every transaction is real and every
 figure on screen is read from the chain. The clock moves as fast as you choose, forward or back.
 
@@ -72,7 +72,7 @@ back.
 - **Contracts**: every timing, the halt threshold, V, the fee split, and the edition scale.
 - **Countries**: any country by ISO 3166 numeric code — its flow, term range, listing and post-sale windows, its
   fees, and its cast: Trust Admins, organisations each, verifiers per organisation, and its share of arrivals.
-- **Flows**: the three V11 flows, changed or added to: any sequence of power, registering the power, agreement,
+- **Flows**: the three V12 flows (path B as Ravi corrected it on 9 Oct), changed or added to: any sequence of power, registering the power, agreement,
   deed, recording, attestation, mint and sale the contracts accept. The screen checks each against the contracts'
   rules (a document followed by its attestation, the mint by the sale, an agreement before the mint, a recording
   after the sale, a power registered before anything it signs) and says which one a flow breaks.
@@ -122,12 +122,17 @@ npm run dist:android           # release/*-android.apk (needs the Android SDK wi
 
 The contracts' ABIs, bytecode and explorer map are committed in `src/abi.json`, `src/bytecode.json` and
 `src/surface.json`, so nothing here needs the contracts' source. To run newer contracts, build them in the
-contracts repository and point the scripts at that `v11` folder:
+contracts repository beside this one (`../contracts`, the default) or set `CONTRACTS_DIR`:
 
 ```bash
-(cd ../evm-eco-futures-contracts/v11 && forge build)
-CONTRACTS_DIR=../evm-eco-futures-contracts/v11 npm run abis
-CONTRACTS_DIR=../evm-eco-futures-contracts/v11 node scripts/surface.mjs
+(cd ../contracts && forge build)
+npm run abis                      # ABIs, bytecode and the explorer map from ../contracts
+```
+
+Many scenarios at once, each on its own fresh anvil node, one log each:
+
+```bash
+scripts/batch.sh /tmp/runs fifteen:60 challenges:45 breaches:45 late:45 pathb:45 holder-failure:60
 ```
 
 Without the browser, on any anvil node started with `--auto-impersonate --timestamp 1767225600 --gas-limit 100000000`:
@@ -135,8 +140,8 @@ Without the browser, on any anvil node started with `--auto-impersonate --timest
 ```bash
 RPC=http://127.0.0.1:8546 SCENARIO=fifteen SEED=1 YEARS=40 npx tsx scripts/headless.ts  # a scenario by id
 RPC=http://127.0.0.1:8546 SCENARIO=fifteen YEARS=4 npx tsx scripts/travel.ts             # back in time and replay: must match
-RPC=http://127.0.0.1:8545 NAME=live npx tsx scripts/audit.ts                           # audit a run: sim/out/audit-live/
-npx tsx scripts/matrix.ts                                                              # every configuration: sim/out/matrix/
+RPC=http://127.0.0.1:8545 NAME=live npx tsx scripts/audit.ts                           # audit a run (still V11's checks: not yet ported)
+npx tsx scripts/matrix.ts                                                              # every configuration (still V11's: not yet ported)
 python3 sim/check_behaviour.py                                                         # each behaviour setting against the chain
 python3 sim/build_matrix.py                                                            # sim/report/matrix.html
 ```
@@ -144,10 +149,10 @@ python3 sim/build_matrix.py                                                     
 | | |
 |---|---|
 | `src/config.ts` | the configuration: contracts, countries, flows, behaviour; the scenarios; validation |
-| `src/deploy.ts` | deploys V11 with a configuration, from the compiled bytecode |
+| `src/deploy.ts` | deploys V12 with a configuration, from the compiled bytecode |
 | `src/engine.ts` | the actors |
 | `src/chain.ts` | viem clients, impersonated sends, the clock, event decoding |
-| `src/ledger.ts` | money decoded from events; the census, the platform's figures and the six invariants, at one block |
+| `src/ledger.ts` | money decoded from events; the census, the platform's figures and the seven invariants, at one block |
 | `src/feed.ts` | each event as a sentence |
 | `src/setup.ts` | the setup screen |
 | `src/travel.ts` | checkpoints: the chain's snapshot with the actors' state, to go back to; the midnight stops |

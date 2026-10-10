@@ -30,8 +30,8 @@ export const ROLE_CALLS: Record<string, [Key, string][]> = {
   verifier: [["registry", "claim"], ["registry", "submitVerification"], ["deeds", "anchorPower"], ["deeds", "recordDocument"], ["deeds", "attest"],
     ["core", "verify"], ["core", "blockCovenant"], ["core", "acceptSeat"], ["challenge", "attestVerification"], ["challenge", "raise"],
     ["challenge", "respond"], ["challenge", "vote"], ["challenge", "withdraw"]],
-  patron: [["usdt", "mint"], ["usdt", "approve"], ["bank", "bid"], ["bank", "settleAuction"], ["token", "list"], ["token", "buy"], ["token", "makeOffer"],
-    ["token", "acceptOffer"], ["tree", "claim"], ["tree", "settle"]],
+  patron: [["usdt", "mint"], ["usdt", "approve"], ["market", "bid"], ["market", "settleAuction"], ["market", "confirmSale"], ["token", "list"], ["token", "buy"], ["token", "makeOffer"],
+    ["token", "acceptOffer"], ["tree", "claim"], ["overcharge", "mintRelic"], ["overcharge", "overcharge"], ["overcharge", "transmute"]],
   "Trust Admin": [["admin", "addVerifier"], ["deeds", "grantPower"], ["deeds", "recordDocument"], ["core", "nominateVerifier"], ["registry", "lapseSale"],
     ["countries", "proposeSettings"], ["challenge", "vote"]],
   GTA: [["governance", "propose"], ["governance", "approve"], ["governance", "execute"], ["deeds", "attest"], ["challenge", "vote"]],
@@ -43,7 +43,7 @@ export const ROLE_CALLS: Record<string, [Key, string][]> = {
  *  the first patron's wallet), and the test USDT a new actor is given and approves. They stay automatic unless the
  *  person asks for them too. */
 export const HOUSEKEEPING = new Set(["challenge.seatPanel", "challenge.lapse", "challenge.closeWindow", "bank.settleAuction",
-  "challenge.sweepReviewPool", "registry.closeUnsold", "tree.closeEditionIfDue", "tree.settle", "governance.execute",
+  "challenge.sweepReviewPool", "registry.closeUnsold", "tree.closeEditionIfDue", "governance.execute",
   "usdt.mint", "usdt.approve"]);
 
 export class Control {

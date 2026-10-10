@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Starts the EcoFutures V11 simulator: a local anvil chain (from 1 January 2026; each run starts when you press Start) and the app at http://localhost:5173.
+# Starts the EcoFutures simulator (V12): a local anvil chain (from 1 January 2026; each run starts when you press Start) and the app at http://localhost:5173.
 # The app deploys the contracts itself, with whatever configuration you choose on its setup screen.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -11,9 +11,9 @@ if curl -s -o /dev/null -X POST -H 'content-type: application/json' \
   exit 1
 fi
 
-# inside the contracts repo, build them so the app runs the current code; on its own, the committed artifacts are used
-if [ -f ../foundry.toml ]; then
-  (cd .. && forge build >/dev/null 2>&1) || { echo "forge build failed: run it in v11/ to see why." >&2; exit 1; }
+# beside the contracts repo, build them so the app runs the current code; on its own, the committed artifacts are used
+if [ -f ../contracts/foundry.toml ]; then
+  (cd ../contracts && forge build >/dev/null 2>&1) || { echo "forge build failed: run it in ../contracts to see why." >&2; exit 1; }
 fi
 # --prune-history keeps a few recent states in memory and writes none to disk
 anvil --auto-impersonate --timestamp 1767225600 --port "$PORT" --gas-limit 100000000 --prune-history 64 --silent &

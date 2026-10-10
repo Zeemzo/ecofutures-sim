@@ -26,7 +26,7 @@
     "vite": "5.4.11"
   },
   "productName": "EcoFutures Simulator",
-  "description": "EcoFutures V11 on a local chain: configurable scenarios run on the real contracts.",
+  "description": "EcoFutures V12 on a local chain: configurable scenarios run on the real contracts.",
   "author": {
     "name": "EcoFutures",
     "email": "azeemashraff@gmail.com"
@@ -73,7 +73,7 @@
       ],
       "category": "Development",
       "executableName": "ecofutures-simulator",
-      "synopsis": "EcoFutures V11 on a local chain"
+      "synopsis": "EcoFutures V12 on a local chain"
     }
   },
   "homepage": "https://ecofutures.io"

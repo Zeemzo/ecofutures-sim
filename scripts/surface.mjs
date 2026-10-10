@@ -7,18 +7,19 @@ import { dirname, join } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const NAME = "surface.json";
-// The contracts: CONTRACTS_DIR, else the V11 folder this sits in (inside the contracts repo). Without either (the
+// The contracts: CONTRACTS_DIR, else the contracts repo beside this one (../contracts). Without either (the
 // simulator on its own) the artifacts committed in src/ are used as they are.
-const v11 = process.env.CONTRACTS_DIR ?? join(here, "..", "..");
+const v11 = process.env.CONTRACTS_DIR ?? join(here, "..", "..", "contracts");
 if (!existsSync(join(v11, "foundry.toml")) || !existsSync(join(v11, "out"))) {
-  console.log(`${NAME}: no built contracts here (set CONTRACTS_DIR to a built V11 to refresh); using the committed copy`);
+  console.log(`${NAME}: no built contracts here (set CONTRACTS_DIR to the built contracts to refresh); using the committed copy`);
   process.exit(0);
 }
 
 const CONTRACTS = [
   ["admin", "EcoFuturesAdmin"], ["countries", "EcoCountries"], ["registry", "EcoRegistry"], ["deeds", "EcoDeeds"],
   ["core", "EcoFuturesCore"], ["bank", "EcoBank"], ["challenge", "EcoChallenge"], ["governance", "EcoFuturesGovernance"],
-  ["tree", "Tree"], ["token", "EcoFuturesToken"], ["lens", "EcoLens"],
+  ["tree", "Tree"], ["token", "EcoFuturesToken"], ["market", "EcoMarket"], ["parties", "EcoParties"],
+  ["overcharge", "EcoOvercharge"], ["lens", "EcoLens"],
 ];
 const KEY_OF_INTERFACE = {
   IEcoAdmin: "admin", IEcoCountries: "countries", IEcoRegistry: "registry", IEcoDeeds: "deeds", IEcoCore: "core",

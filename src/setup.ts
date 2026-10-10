@@ -48,7 +48,7 @@ const CONTRACTS: Group[] = [
     { path: "contracts.yearDays", label: "Protocol year (365.25 for the calendar's average)", unit: "days", min: 2, step: 0.25 },
     { path: "contracts.acceptanceDays", label: "A claiming verifier submits within", unit: "days", min: 1 },
     { path: "contracts.watchdogDays", label: "Watchdog window after a verification", unit: "days", min: 1 },
-    { path: "contracts.backstopDays", label: "Backstop delay before a GTA may attest", unit: "days", min: 1 },
+    { path: "contracts.gtaAttestFromDays", label: "Days before a GTA may attest a document", unit: "days", min: 1 },
     { path: "contracts.minAuctionDays", label: "Shortest auction", unit: "days", min: 1 },
     { path: "contracts.reviewDays", label: "Review window after a re-verification", unit: "days", min: 1 },
     { path: "contracts.maxVerificationDelayDays", label: "A verifier this late can be replaced", unit: "days", min: 1 },
@@ -61,7 +61,7 @@ const CONTRACTS: Group[] = [
     { path: "contracts.baseFee", label: "V, the default base fee", unit: "USDT", min: 1 },
     { path: "contracts.verifierPermille", label: "Verifier's share of the sale", unit: "per 1,000", max: 999 },
     { path: "contracts.taxPermille", label: "Platform tax: server + Trust Admin + review pool", unit: "per 1,000", max: 999 },
-    { path: "contracts.serverPermille", label: "Of which the server", unit: "per 1,000", max: 999 },
+    { path: "contracts.foundationPermille", label: "Of which the Foundation", unit: "per 1,000", max: 999 },
   ] },
   { title: "TR3 editions", note: "An edition holds this many land-years (hundredths of a hectare × years) × F², and mints 10,000,000 TR3 across them: 100,000 in production, 1,000 hectare-years in edition 1. An edition not full eight protocol years after it opened closes anyway, burning what no land took. Smaller fills the editions sooner.", fields: [
     { path: "contracts.editionScale", label: "Edition scale", min: 1 },
@@ -72,7 +72,7 @@ const COUNTRY_COLS: { key: keyof CountryConfig; label: string; w?: string; min?:
   { key: "code", label: "ISO", w: "64px", min: 1, max: 999 }, { key: "name", label: "Name", w: "120px" }, { key: "short", label: "Code", w: "48px" },
   { key: "flowId", label: "Flow", w: "170px" }, { key: "minTerm", label: "Min term", min: 3, max: 100 }, { key: "maxTerm", label: "Max term", min: 3, max: 100 },
   { key: "listingDays", label: "Listing days", min: 1 }, { key: "postSaleDays", label: "Post-sale days", min: 0 },
-  { key: "baseFee", label: "V (0 = default)", min: 0 }, { key: "attestationFee", label: "Attestation fee", min: 0 }, { key: "judgmentFee", label: "Judgment fee", min: 0 },
+  { key: "baseFee", label: "V (0 = default)", min: 0 }, { key: "deskRate", label: "D (0 = V × 4/50)", min: 0 },
   { key: "holders", label: "Trust Admins", min: 1, max: 9 }, { key: "orgsPerHolder", label: "Orgs each", min: 1, max: 9 },
   { key: "verifiersPerOrg", label: "Verifiers per org", min: 1, max: 4 }, { key: "weight", label: "Share of arrivals", min: 0 },
 ];
@@ -195,8 +195,8 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
       if (!code) return;
       const iso = ALL_COUNTRIES.find(([n]) => n === code);
       const [name, short] = KNOWN_COUNTRIES[code] ?? (iso ? [iso[2], iso[1]] : [`Country ${code}`, `C${code}`.slice(0, 3)]);
-      sc.countries.push({ code, name, short, flowId: 2, minTerm: 3, maxTerm: 100, listingDays: 330, postSaleDays: 0, baseFee: 0,
-        attestationFee: 5, judgmentFee: 9, holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 20 });
+      sc.countries.push({ code, name, short, flowId: 2, minTerm: 3, maxTerm: 100, listingDays: 358, postSaleDays: 0, baseFee: 0,
+        deskRate: 0, holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 20 });
       persist(); render();
       return;
     }
