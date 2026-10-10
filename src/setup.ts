@@ -73,6 +73,7 @@ const COUNTRY_COLS: { key: keyof CountryConfig; label: string; w?: string; min?:
   { key: "flowId", label: "Flow", w: "170px" }, { key: "minTerm", label: "Min term", min: 3, max: 100 }, { key: "maxTerm", label: "Max term", min: 3, max: 100 },
   { key: "listingDays", label: "Listing days", min: 1 }, { key: "postSaleDays", label: "Post-sale days", min: 0 },
   { key: "baseFee", label: "V (0 = default)", min: 0 }, { key: "deskRate", label: "D (0 = V × 4/50)", min: 0 },
+  { key: "allowanceFixed", label: "Allowance, fixed", min: 0 }, { key: "allowancePerHa", label: "Allowance per ha", min: 0 },
   { key: "holders", label: "Trust Admins", min: 1, max: 9 }, { key: "orgsPerHolder", label: "Orgs each", min: 1, max: 9 },
   { key: "verifiersPerOrg", label: "Verifiers per org", min: 1, max: 4 }, { key: "weight", label: "Share of arrivals", min: 0 },
 ];
@@ -196,7 +197,7 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
       const iso = ALL_COUNTRIES.find(([n]) => n === code);
       const [name, short] = KNOWN_COUNTRIES[code] ?? (iso ? [iso[2], iso[1]] : [`Country ${code}`, `C${code}`.slice(0, 3)]);
       sc.countries.push({ code, name, short, flowId: 2, minTerm: 3, maxTerm: 100, listingDays: 358, postSaleDays: 0, baseFee: 0,
-        deskRate: 0, holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 20 });
+        deskRate: 0, allowanceFixed: 30, allowancePerHa: 2, holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 20 });
       persist(); render();
       return;
     }

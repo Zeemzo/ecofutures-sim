@@ -32,10 +32,12 @@ export const Holds = { BREACH: 1, VACANCY: 2, DEED: 4, HALT: 8, ACCESSION: 16, C
 export const Payee = ["attestor", "panel", "challenger", "guardian"];
 export const Action = {
   NONE: 0, ADD_GTA: 1, REMOVE_GTA: 2, ADMIT_HOLDER: 3, FREEZE_HOLDER: 4, UNFREEZE_HOLDER: 5, RATIFY_FREEZE: 6,
-  APPLY_SETTINGS: 7, SET_COUNTRY_STATUS: 8, REVOKE_POWER: 9, SWITCH_PAYEE: 10, REASSIGN_VERIFIER: 11, CLEAR_PARCEL: 12,
-  UNBLOCK_COVENANT: 13, CANCEL_COVENANT: 14, NOMINATE_VERIFIER: 15, FREEZE_DRIP: 16, SUSPEND_VERIFIER: 17,
-  DISMISS_VERIFIER: 18, END_REWARD: 19, EXTEND_CLOCK: 20, ACQUISITION: 21, CANCEL_ROOT: 22, RECORD_DOCUMENT: 23,
+  SET_COUNTRY_STATUS: 7, REVOKE_POWER: 8, SWITCH_PAYEE: 9, REASSIGN_VERIFIER: 10, CLEAR_PARCEL: 11,
+  UNBLOCK_COVENANT: 12, CANCEL_COVENANT: 13, NOMINATE_VERIFIER: 14, FREEZE_DRIP: 15, SUSPEND_VERIFIER: 16,
+  DISMISS_VERIFIER: 17, END_REWARD: 18, EXTEND_CLOCK: 19, ACQUISITION: 20, CANCEL_ROOT: 21, RECORD_DOCUMENT: 22,
 } as const;
+/** What a country vote decides: the GTAs and the country's own Trust Admins, more than half of them. */
+export const Matter = { REPLACE_HOLDER: 0, SET_FEES: 1, APPLY_SETTINGS: 2 } as const;
 export const ActionName = Object.fromEntries(Object.entries(Action).map(([k, v]) => [v, k.toLowerCase().replaceAll("_", " ")]));
 /** The digital agreements (EcoTypes.Agreements), by the kind an account accepts. */
 export const Agreement = {

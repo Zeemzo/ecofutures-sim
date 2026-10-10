@@ -10,9 +10,9 @@ export const MONEY = [
   "Instalments: Foundation", "Instalments: guardian", "Review pool funded", "Pool: attestors", "Pool: panels",
   "Pool: challengers", "Pool: swept to guardians", "Sale refunds", "Paid to patrons", "Resale volume",
   "TR3: patrons", "TR3: guardians", "TR3: referrers", "Trust Admin share withheld",
-  "Withheld shares paid out", "Held instalments at the End Date",
+  "Withheld shares paid out", "Held instalments at the End Date", "Allowance drawn by Holders",
 ] as const;
-export const OUTFLOWS = [1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 22, 23];
+export const OUTFLOWS = [1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 22, 23, 24];
 
 export class Ledger {
   money: bigint[] = MONEY.map(() => 0n);
@@ -53,7 +53,8 @@ export class Ledger {
         this.reqOfChallenge.set(a.challengeId, option <= 2 ? Number(a.subject) : this.reqOfToken.get(a.subject) ?? 0);
         break;
       }
-      case "registry.VerificationRequested": this.add(0, a.verificationFee + a.attestationFee + a.judgmentFee); break;
+      case "registry.VerificationRequested": this.add(0, a.verificationFee + a.attestationFee + a.judgmentFee + a.allowance); break;
+      case "registry.AllowanceDrawn": this.add(24, a.amount); this.credit(a.holder, a.amount); break;
       case "registry.VerifierPaid": this.add(1, a.amount); this.credit(a.verifier, a.amount); break;
       case "registry.AttestationPaid": this.add(2, a.amount); this.credit(a.attester, a.amount); break;
       case "registry.JudgmentPaid": {
@@ -176,7 +177,7 @@ async function readOne(rid: number, done: boolean, at: (c: any, fn: string, args
     status, endReason: Number(r.endReason), step, tokenId: r.tokenId, stage, guardian: r.guardian, verifier: r.verifier,
     challenged: r.challengeId !== 0n,
   };
-  const part: Part = { row, registry: r.verifierShare + r.attestationFee + r.judgmentFee, market: 0n, bank: 0n, pool: 0n, ok: true, token: false };
+  const part: Part = { row, registry: r.verifierShare + r.attestationFee + r.judgmentFee + r.allowance, market: 0n, bank: 0n, pool: 0n, ok: true, token: false };
   if (r.tokenId === 0n) return part;
   const tid = r.tokenId;
   const [c, a, settling, pool, auction, w, undecided, owner, reward, holder] = await Promise.all([

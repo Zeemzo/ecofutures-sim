@@ -5,7 +5,7 @@ import { encodeAbiParameters, keccak256, maxUint256, zeroAddress, getAddress, ty
 import { read, send, labelAddress, fund, addr, bulk, abis, type Key } from "./chain";
 import {
   DAY, YEAR, RequestStatus, Step, CovenantStatus, BlockReason, ChallengeState, Option, OptionName, Holds, Action,
-  Outcome, OutcomeName, Agreement, COMPLETED, register, nameOf, countryName,
+  Outcome, OutcomeName, Agreement, COMPLETED, Matter, register, nameOf, countryName,
 } from "./model";
 import type { Scenario, Behaviour, CountryConfig } from "./config";
 import { Control } from "./control";
@@ -469,8 +469,8 @@ export class Engine {
       return 0;
     }
     const term = lo + this.rand(hi - lo + 1);
-    const [vf, af, jf] = await read<bigint[]>("countries", "quote", [country, BigInt(land)]);
-    const fees = vf + af + jf;
+    const [vf, af, jf, al] = await read<bigint[]>("countries", "quote", [country, BigInt(land)]);
+    const fees = vf + af + jf + al;
     const g = await this.newGuardian(2n * fees + 1000n * 10n ** 18n);
     const ref = this.rand(3) === 0 ? this.patrons[this.rand(this.patrons.length)] : zeroAddress;
     const rid = N(await read("registry", "nextRequestId"));
@@ -641,6 +641,8 @@ export class Engine {
       }
       await this.act(r.verifier, "deeds", "anchorPower", [BigInt(rid), h("reg", rid), "RG/0001"], "anchorPower", rid);
     } else if ((step === Step.DEED || step === Step.AGREEMENT) && preSale) {
+      // the Holder pays the duty and the notary, and draws its costs from the allowance against the receipts
+      if (holderCan) await this.drawCosts(rid, holder, 0.5 + this.rand(40) / 100, "duty and notary");
       if (this.fate.get(rid) === F.REFUSE) {
         // the landowner will not sign: the verifier records it and keeps its verification fee
         if (await this.act(r.verifier, "deeds", "recordRefusal", [BigInt(rid)], "refusal", rid)) {
@@ -671,6 +673,7 @@ export class Engine {
         return;
       }
       if (this.fate.get(rid) === F.LAPSE_NOTHING || !holderCan) { this.nextAt.set(rid, saleAt + post + 1); return; }
+      await this.drawCosts(rid, holder, this.rand(80) / 100, "registration");
       await this.act(holder, "deeds", "recordDocument", [BigInt(rid), h("recording", rid), BigInt(t), "R.7/12.345"], "recordRecording", rid);
     } else if (step === Step.ATTEST) {
       const saleAt = N(r.saleAt), post = N(r.postSaleWindow);
@@ -694,6 +697,18 @@ export class Engine {
     } else if (step === Step.SALE) {
       await this.sale(rid, r, t);
     }
+  }
+
+  /** The Holder draws `share` of what is left of the allowance, against receipts; at most once per kind of cost. */
+  private drawn = new Set<string>();
+  async drawCosts(rid: number, holder: Address, share: number, what: string) {
+    const key = `${rid}:${what}`;
+    if (this.drawn.has(key)) return;
+    this.drawn.add(key);
+    const left: bigint = (await read("registry", "getRequest", [BigInt(rid)])).allowance;
+    const amount = (left * BigInt(Math.round(share * 1000))) / 1000n;
+    if (amount === 0n) return;
+    await this.act(holder, "deeds", "drawAllowance", [BigInt(rid), amount, h("receipts", rid, what), `ipfs://receipts/${rid}`], "drawAllowance", rid);
   }
 
   /** A starting price the Market accepts: at least the floor for its cadence (FM p8). Below USD 500 x (2T + 1) the
@@ -1262,6 +1277,15 @@ export class Engine {
     } else if (y === 2) {
       this.note("gov", 0, "The Council records the Foundation's amended Articles on chain.");
       await this.vote(Action.RECORD_DOCUMENT, ["bytes32", "bytes32", "string"], [h("ARTICLES"), h("articles", t), "ipfs://articles"], "record the Articles");
+    } else if (y === 3) {
+      // counsel's figure for the stamp duty is in: the country's own Trust Admins and the GTAs set the allowance
+      const c = first;
+      const perHa = c.allowancePerHa + 1;
+      this.note("gov", 0, `Counsel's note on ${c.name}'s stamp duty is in: the GTAs and ${c.name}'s Trust Admins vote the execution allowance to USD ${c.allowanceFixed} plus USD ${perHa} a hectare, for new requests.`);
+      const fees = { baseFee: BigInt(c.baseFee) * 10n ** 18n, deskRate: BigInt(c.deskRate) * 10n ** 18n, allowanceFixed: BigInt(c.allowanceFixed) * 10n ** 18n, allowancePerHa: BigInt(perHa) * 10n ** 18n };
+      const payload = encodeAbiParameters([{ type: "uint16" }, { type: "tuple", components: [
+        { name: "baseFee", type: "uint96" }, { name: "deskRate", type: "uint96" }, { name: "allowanceFixed", type: "uint96" }, { name: "allowancePerHa", type: "uint96" }] }], [c.code, fees]);
+      if (await this.countryVote(Matter.SET_FEES, c.code, payload, `set ${c.name}'s fees`)) c.allowancePerHa = perHa;
     } else if (y === 4) {
       const target = tas(second)[1] ?? tas(second)[0];
       if (!target) return;
@@ -1289,7 +1313,7 @@ export class Engine {
       const sid = await read<bigint>("countries", "nextProposalId");
       if (await this.act(proposer, "countries", "proposeSettings",
         [c.code, { flowId: c.flowId, minTermYears: min, maxTermYears: c.maxTerm, listingWindow: c.listingDays * DAY, postSaleWindow: c.postSaleDays * DAY }, h("counsel")], "settings")) {
-        if (await this.vote(Action.APPLY_SETTINGS, ["uint256"], [sid], `apply ${c.name} settings`)) c.minTerm = min;
+        if (await this.countryVote(Matter.APPLY_SETTINGS, c.code, enc(["uint256"], [sid]), `apply ${c.name} settings`)) c.minTerm = min;
       }
     } else if (y === 9) {
       const tid = await this.someActive();
@@ -1323,19 +1347,25 @@ export class Engine {
     }
   }
 
-  /** A Holder's replacement: the country's other Holders and the GTAs vote, more than half of them (FM p19, G3). */
+  /** A country vote: the GTAs and the country's own Trust Admins (not frozen), more than half of them (FM p19; Ravi,
+   *  10 Oct). A GTA proposes; the others and the country's Trust Admins vote until it carries. */
+  async countryVote(matter: number, country: number, payload: `0x${string}`, label: string, excluded: Address = zeroAddress): Promise<boolean> {
+    const gtas = (await this.q<Address[]>("governance", "getGTAs")).map((a) => getAddress(a));
+    const id = (await read<bigint>("governance", "countryVoteCount")) + 1n;
+    if (!(await this.act(gtas[0], "governance", "proposeCountryVote", [matter, payload], `propose ${label}`))) return false;
+    const electors = [...gtas.slice(1), ...(this.countryHolders.get(country) ?? []).filter((x) => x !== excluded)];
+    for (const v of electors) {
+      const [votes, needed] = await read<[bigint, bigint]>("governance", "countryVotesOf", [id]);
+      if (votes >= needed) break;
+      await this.attempt(v, "governance", "voteCountry", [id]);
+    }
+    return this.act(this.server, "governance", "executeCountryVote", [id], label);
+  }
+
+  /** A Holder's replacement, by country vote (FM p19, G3). */
   async jointReplacement(holder: Address, successor: Address, c: CountryConfig) {
     this.note("gov", 0, `The Council and ${c.name}'s other Trust Admins vote to replace ${nameOf(holder)} with ${nameOf(successor)}: its fee and authority follow, with the shares withheld since its freeze.`);
-    const gtas = (await this.q<Address[]>("governance", "getGTAs")).map((a) => getAddress(a));
-    const id = (await read<bigint>("governance", "replacementCount")) + 1n;
-    if (!(await this.act(gtas[0], "governance", "proposeReplacement", [holder, successor], "proposeReplacement"))) return;
-    const electors = [...gtas.slice(1), ...(this.countryHolders.get(c.code) ?? []).filter((x) => x !== holder)];
-    for (const v of electors) {
-      const [votes, needed] = await read<[bigint, bigint]>("governance", "replacementVotesOf", [id]);
-      if (votes >= needed) break;
-      await this.attempt(v, "governance", "voteReplacement", [id]);
-    }
-    if (await this.act(this.server, "governance", "executeReplacement", [id], "executeReplacement")
+    if (await this.countryVote(Matter.REPLACE_HOLDER, c.code, enc(["address", "address"], [holder, successor]), "replace Trust Admin", holder)
       && (await read<bigint>("bank", "heldForSuccessor", [holder])) > 0n) {
       await this.act(this.server, "bank", "releaseHeldHolderFees", [holder], "releaseHeldHolderFees");
     }

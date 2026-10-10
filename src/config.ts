@@ -53,6 +53,10 @@ export type CountryConfig = {
   postSaleDays: number;
   baseFee: number;       // USDT; 0 = the protocol default V
   deskRate: number;      // USDT; 0 = V x 4/50
+  /** The execution allowance, on top of the fees: a fixed part and a part per hectare (USDT). It covers the duty,
+   *  signing and registration only; the Holder draws its costs and the rest goes back to the landowner. */
+  allowanceFixed: number;
+  allowancePerHa: number;
   holders: number;       // Trust Admins
   orgsPerHolder: number;
   verifiersPerOrg: number;
@@ -217,7 +221,9 @@ export function toProduction(s: Scenario): string[] {
 }
 
 const country = (c: Partial<CountryConfig> & Pick<CountryConfig, "code" | "name" | "short" | "flowId">): CountryConfig => ({
-  minTerm: 3, maxTerm: 100, listingDays: LISTING_DAYS, postSaleDays: 0, baseFee: 0, deskRate: 0,
+  // the allowance until counsel's figures for the duty are in: USD 30 for the notary and registration, and Sri Lanka's
+  // LC5 duty of 2 % of a USD 100/ha stated rental
+  minTerm: 3, maxTerm: 100, listingDays: LISTING_DAYS, postSaleDays: 0, baseFee: 0, deskRate: 0, allowanceFixed: 30, allowancePerHa: 2,
   holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 25, ...c,
 });
 

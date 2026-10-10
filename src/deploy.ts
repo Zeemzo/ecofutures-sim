@@ -99,7 +99,7 @@ export async function deploy(s: Scenario, progress: (msg: string) => void = () =
     await call("countries", "enableCountry", [
       c.code,
       { flowId: c.flowId, minTermYears: c.minTerm, maxTermYears: c.maxTerm, listingWindow: Number(BigInt(c.listingDays) * DAY), postSaleWindow: Number(BigInt(c.postSaleDays) * DAY) },
-      { baseFee: BigInt(c.baseFee) * E18, deskRate: BigInt(c.deskRate) * E18 },
+      { baseFee: BigInt(c.baseFee) * E18, deskRate: BigInt(c.deskRate) * E18, allowanceFixed: BigInt(c.allowanceFixed) * E18, allowancePerHa: BigInt(c.allowancePerHa) * E18 },
     ]);
   }
 
