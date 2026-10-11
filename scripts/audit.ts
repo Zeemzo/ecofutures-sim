@@ -237,10 +237,10 @@ const trSplit = check("tr3-split", "TR3", "Of everything a covenant has released
 const trRef = check("tr3-referrer", "TR3", "A referrer who is a verifier, a Trust Admin or a GTA when the claim is made takes nothing; its share stays with the landowner", "Tree._referrerEligible ('no TR3 to anyone who judges a score')");
 const trCap = check("tr3-cap", "TR3", "No allocation is above 1,000,000 TR3, and no covenant's land TR3 (released less boosts) above its allocation", "Tree.MAX_BASE_TR3; Tree.place");
 const trSup = check("tr3-supply", "TR3", "TR3's supply = everything the claim events minted = minted to patrons + guardians + referrers", "Tree");
-const plc = check("edition-placement", "Editions", "At its mint each land takes its place in the open edition, wholly: one that does not fit in the room left closes the edition and goes to the next (only the 21st's last land takes the room left); its TR3 at a score of 100 = land-years x 10,000,000 / the edition's size, at most 1,000,000", "D1; Tree.place; FM p10");
+const plc = check("edition-placement", "Editions", "At its request (in sign-up order) each land takes its place in the open edition, wholly: one that does not fit in the room left closes the edition and goes to the next (only the 21st's last land takes the room left); its TR3 at a score of 100 = land-years x 10,000,000 / the edition's size, at most 1,000,000", "D1, D17; Tree.place; FM p10");
 const cls = check("edition-close", "Editions", "An edition closes when it is full, when a land does not fit in it, or eight protocol years after it opened; what no land took is burned, and the next opens (at the clock's mark, or now)", "D1; TR3 model v6; Tree._close, _roll");
 const edState = check("edition-state", "Editions", "The editions replayed from the events end where Tree is now: the open edition, the land-years placed in it and when it opened", "Tree.editionOpen, editionUsed, editionOpenedAt");
-const plRel = check("place-released", "Editions", "A minted land that never became a covenant leaves its edition when its request ends: its room reopens while the edition is open, else its TR3 is burned; a covenant's land is never released", "FM p10; Tree.release; EcoRegistry._finish");
+const plRel = check("place-released", "Editions", "A land that never became a covenant -- expired, cancelled, failed or unsold -- leaves its edition when its request ends: its room reopens while the edition is open, else its TR3 is burned; a covenant's land is never released", "FM p10; Tree.release; EcoRegistry._finish");
 const asg = check("edition-assignment", "Editions", "Each covenant activates in the edition, and with the land-years, its land was placed with", "Tree.assignEdition; Core.activate");
 const rew = check("tr3-reward", "TR3", "Each covenant's stream starts with its place's TR3 at a score of 100 as its allocation, at the covenant's score", "Tree.startReward; TR3 model v6");
 const relScore = check("tr3-release-score", "TR3", "Each release is at the score in force since the last (at the new score when the release lifts a 3B hold), and the score's shortfall goes to the Reserve: released = floor((released + credited) x score / 100)", "Tree._settle, pass; addendum (ECOSCORE source); FM p16 (3B back-paid at the corrected score)");
@@ -354,7 +354,7 @@ type Ch = { cid: bigint; option: number; subject: bigint; challenger: string; de
   firstPool?: bigint; before?: { status: number; blockReason: number; win?: Win; lastAttester: string } ; ended: boolean };
 const chs = new Map<bigint, Ch>();
 const relics = new Map<bigint, { edition: number; cap: bigint }>();
-type Place = { rid: number; edition: number; ly: bigint; full: bigint; released: boolean };
+type Place = { rid: number; edition: number; ly: bigint; full: bigint; capped: bigint; released: boolean };
 const places = new Map<number, Place>();
 const owners = new Map<bigint, string>();
 // the edition model, replayed: the open edition, its land-years and when it opened (Tree's initialisation)
@@ -1107,7 +1107,7 @@ for (const e of events) {
         () => `placed ${a.landYears} of ${asked} land-years in edition ${a.edition} for ${usd(B(a.tr3AtFullScore))} TR3; expected ${ly} in edition ${ed} for ${usd(full)}`);
       capBurn += rawFull - full;
       used += ly;
-      places.set(rid, { rid, edition: ed, ly, full, released: false });
+      places.set(rid, { rid, edition: ed, ly, full, capped: rawFull - full, released: false });
       break;
     }
     case "tree.PlaceReleased": {
@@ -1116,7 +1116,8 @@ for (const e of events) {
       const ended = inTx(e, "registry.RequestEnded", (x) => N(x.a.requestId) === rid && N(x.a.reason) !== 7).length > 0;
       plRel.test(!!p && !p.released && N(a.edition) === p.edition && B(a.landYears) === p.ly && !!a.roomReopened === reopened && B(a.burned) === (reopened ? 0n : p.full) && ended, `#${rid}`,
         () => `released edition ${a.edition}, ${a.landYears} land-years, reopened ${a.roomReopened}, burned ${usd(B(a.burned))}; its place: edition ${p?.edition}, ${p?.ly}, open edition ${ed}`);
-      if (p) { p.released = true; if (reopened) used -= p.ly; }
+      // a reopened room returns whole: what the per-land cap burned of it is unburned (Tree.release)
+      if (p) { p.released = true; if (reopened) { used -= p.ly; capBurn -= p.capped; } }
       burnedEv += B(a.burned);
       break;
     }

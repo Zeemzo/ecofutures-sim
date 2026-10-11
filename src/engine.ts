@@ -530,6 +530,15 @@ export class Engine {
       this.nextAt.set(rid, t + DAY);
       return;
     }
+    // not verified within two acceptance windows of the request: anyone ends it, and its edition room is freed (D17)
+    const expiresAt = N(r.requestedAt) + 2 * this.acceptance;
+    if ((status === RequestStatus.OPEN || status === RequestStatus.CLAIMED) && t > expiresAt) {
+      if (await this.act(this.server, "registry", "cancelRequest", [BigInt(rid)], "expire", rid)) {
+        this.note("expired", rid, `Request #${rid} was not verified within 60 days of its request: it expires, is refunded, and its place in the editions goes to the next land.`);
+      }
+      this.nextAt.set(rid, t + DAY);
+      return;
+    }
     if (status === RequestStatus.OPEN) {
       if (this.fate.get(rid) === F.CANCEL) {
         await this.act(r.guardian, "registry", "cancelRequest", [BigInt(rid)], "cancel", rid);
@@ -539,12 +548,13 @@ export class Engine {
       // after an upheld 1A the challenger has three days' first claim (FM p15)
       const first = getAddress(r.firstClaimant);
       let v: Address = zeroAddress;
-      if (first !== zeroAddress && t + 3600 <= N(r.firstClaimUntil)) { // an hour's margin
-        // the challenger takes its first claim -- unless its own Trust Admin is frozen, which bars the claim
-        if (this.rand(10) < 7 && (await this.holderCan(await this.q<Address>("admin", "holderOf", [first])))) v = first;
+      if (first !== zeroAddress && t <= N(r.firstClaimUntil)) {
+        // the challenger takes its first claim, with an hour's margin -- unless its own Trust Admin is frozen, which
+        // bars the claim; nobody else may claim until it ends
+        if (t + 3600 <= N(r.firstClaimUntil) && this.rand(10) < 7 && (await this.holderCan(await this.q<Address>("admin", "holderOf", [first])))) v = first;
         else { this.nextAt.set(rid, N(r.firstClaimUntil) + 1); return; }
       } else v = await this.pickVerifier(N(r.country), r.barred, zeroAddress, r.guardian);
-      if (v === zeroAddress) { this.nextAt.set(rid, t + 30 * DAY); return; }
+      if (v === zeroAddress) { this.nextAt.set(rid, Math.min(t + 30 * DAY, expiresAt + 1)); return; }
       if (await this.act(v, "registry", "claim", [BigInt(rid)], v === first ? "first claim" : "claim", rid)) {
         if (v === first) this.note("first-claim", rid, `${nameOf(v)}, whose challenge removed the verification, takes request #${rid} on its first claim.`);
         this.submitAt.set(rid, t + Math.min(5 * DAY + this.rand(20) * DAY, Math.max(DAY, this.acceptance - DAY)));
@@ -560,7 +570,8 @@ export class Engine {
         const v = await this.pickVerifier(N(r.country), r.barred, r.verifier, r.guardian);
         if (v !== zeroAddress && (await this.act(v, "registry", "claim", [BigInt(rid)], "reclaim", rid))) {
           this.note("claim-lapsed", rid, `${nameOf(r.verifier)} let the claim on request #${rid} lapse; ${nameOf(v)} takes it over.`);
-          this.submitAt.set(rid, t + Math.min(5 * DAY + this.rand(15) * DAY, Math.max(DAY, this.acceptance - DAY)));
+          // inside the claim's window and the request's 60 days
+          this.submitAt.set(rid, Math.min(t + Math.min(5 * DAY + this.rand(15) * DAY, Math.max(DAY, this.acceptance - DAY)), expiresAt - DAY));
         }
         const s = this.submitAt.get(rid) ?? 0;
         this.nextAt.set(rid, s > t ? s : t + 7 * DAY);
@@ -1055,8 +1066,9 @@ export class Engine {
   async reseat(rid: number, tid: bigint, c: any, holder: Address, holderCan: boolean, st: any) {
     const t = this.now;
     const seat = st.seat;
-    if (seat.vacant && getAddress(seat.firstClaimant) !== zeroAddress && t + 3600 <= N(seat.firstClaimUntil)) { // an hour's margin
-      if (this.rand(10) < 7 && await this.act(seat.firstClaimant, "parties", "claimSeat", [tid], "claimSeat", rid)) {
+    if (seat.vacant && getAddress(seat.firstClaimant) !== zeroAddress && t <= N(seat.firstClaimUntil)) {
+      // the claim is taken with an hour's margin; inside its last hour nobody else may nominate either, so wait it out
+      if (t + 3600 <= N(seat.firstClaimUntil) && this.rand(10) < 7 && await this.act(seat.firstClaimant, "parties", "claimSeat", [tid], "claimSeat", rid)) {
         this.note("reseat", rid, `${nameOf(seat.firstClaimant)}, whose challenge vacated the seat, takes #${rid} on its first claim.`);
         await this.replacementPower(rid, tid, holder, holderCan);
         return;
