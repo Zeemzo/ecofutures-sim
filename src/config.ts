@@ -57,6 +57,12 @@ export type CountryConfig = {
    *  signing and registration only; the Holder draws its costs and the rest goes back to the landowner. */
   allowanceFixed: number;
   allowancePerHa: number;
+  /** The simulated landowners' plots: most near the typical size, one in a hundred as large as the largest
+   *  (log-normal), never above what the open edition allows. */
+  typicalHa: number;
+  largestHa: number;
+  /** What patrons pay for a covenant, in USDT a hectare a year of its term (never below the protocol's floor). */
+  valuePerHaYear: number;
   holders: number;       // Trust Admins
   orgsPerHolder: number;
   verifiersPerOrg: number;
@@ -77,6 +83,9 @@ export type Behaviour = {
   arrivalsPerYear: number;
   /** Stop admitting landowners when the last edition begins. */
   fillLand: boolean;
+  /** Plots drawn up to the largest the open edition allows, so they grow with the editions, instead of from each
+   *  country's typical and largest plot. Only to fill all 21 editions in a run. */
+  landGrowsWithEditions: boolean;
   /** Years landowners keep arriving, when not filling the land. */
   arrivalYears: number;
   /** At most this many requests in all (0 = no limit). */
@@ -224,14 +233,16 @@ const country = (c: Partial<CountryConfig> & Pick<CountryConfig, "code" | "name"
   // the allowance until counsel's figures for the duty are in: USD 30 for the notary and registration, and Sri Lanka's
   // LC5 duty of 2 % of a USD 100/ha stated rental
   minTerm: 3, maxTerm: 100, listingDays: LISTING_DAYS, postSaleDays: 0, baseFee: 0, deskRate: 0, allowanceFixed: 30, allowancePerHa: 2,
+  typicalHa: 10, largestHa: 500, valuePerHaYear: 50,
   holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 25, ...c,
 });
 
 export const COUNTRIES_V12: CountryConfig[] = [
-  country({ code: 144, name: "Sri Lanka", short: "LK", flowId: 1, maxTerm: 99, holders: 3, orgsPerHolder: 2, weight: 35 }),
-  country({ code: 360, name: "Indonesia", short: "ID", flowId: 2, maxTerm: 29, weight: 20 }),
-  country({ code: 392, name: "Japan", short: "JP", flowId: 2, weight: 20 }),
-  country({ code: 76, name: "Brazil", short: "BR", flowId: 3, minTerm: 16, postSaleDays: POST_SALE_DAYS, weight: 25 }),
+  // plot sizes and values per hectare-year are placeholders until Ravi's figures are in (12 Oct)
+  country({ code: 144, name: "Sri Lanka", short: "LK", flowId: 1, maxTerm: 99, holders: 3, orgsPerHolder: 2, weight: 35, typicalHa: 4, largestHa: 200, valuePerHaYear: 60 }),
+  country({ code: 360, name: "Indonesia", short: "ID", flowId: 2, maxTerm: 29, weight: 20, typicalHa: 15, largestHa: 2_000, valuePerHaYear: 30 }),
+  country({ code: 392, name: "Japan", short: "JP", flowId: 2, weight: 20, typicalHa: 3, largestHa: 150, valuePerHaYear: 80 }),
+  country({ code: 76, name: "Brazil", short: "BR", flowId: 3, minTerm: 16, postSaleDays: POST_SALE_DAYS, weight: 25, typicalHa: 80, largestHa: 10_000, valuePerHaYear: 15 }),
 ];
 
 /** Countries a user can add by ISO code, with their names. Any other code is accepted too. */
@@ -246,7 +257,7 @@ export const KNOWN_COUNTRIES: Record<number, [string, string]> = {
 export const DEFAULT_BEHAVIOUR: Behaviour = {
   refusePct: 2, kycLatePct: 10, kycFailPct: 20, landSalePermille: 10, accedePct: 80, relicUsePct: 50,
   termOptions: [15, 35, 20, 30], wrongBlockPct: 25,
-  arrivalsPerYear: 20, fillLand: false, arrivalYears: 15, maxRequests: 0, maxTermYears: 25,
+  arrivalsPerYear: 20, fillLand: false, landGrowsWithEditions: false, arrivalYears: 15, maxRequests: 0, maxTermYears: 25,
   cancelPct: 2, claimLapsePct: 2, abandonPct: 2, preMintChallengePct: 14, unsoldPct: 4,
   pathBLapseNothingPct: 8, pathBLapseUnattestedPct: 6,
   attestPct: 72, challengePct: 8,
@@ -266,10 +277,10 @@ const onlyCountry = (code: number) => COUNTRIES_V12.map((c) => ({ ...c, weight: 
 export const SCENARIOS: Scenario[] = [
   make("fifteen", "Fifteen years of arrivals", "The batch simulation: about eight landowners a year for fifteen years, every term run to its end.",
     { arrivalYears: 15, arrivalsPerYear: 7.5 }),
-  make("fill", "Until the programme closes", "Landowners keep arriving until all 21 editions are closed; then every term runs out and the programme ends. Editions are 1/1,000 of production's size, so they fill in a few decades. Plots keep production's sizes, so each land takes a large share of these small editions and many covenants reach the 1,000,000 TR3 cap: what they cannot mint is burned.",
-    { fillLand: true, arrivalsPerYear: 30 }, COUNTRIES_V12, { editionScale: 100 }),
-  make("good-day", "A good day, every edition", "Nothing goes wrong: no challenges, cancellations or lapses, verifiers on time, every review window attested, every EFT sold. Landowners arrive until all 21 editions have filled, none of them by the clock. Editions are 1/5,000 of production's size, so they fill in a few years. Plots keep production's sizes, so each land takes a large share of these small editions and many covenants reach the 1,000,000 TR3 cap: what they cannot mint is burned.",
-    { fillLand: true, arrivalsPerYear: 40, cancelPct: 0, claimLapsePct: 0, abandonPct: 0, preMintChallengePct: 0, unsoldPct: 0,
+  make("fill", "Until the programme closes", "Landowners keep arriving until all 21 editions are closed; then every term runs out and the programme ends. Editions are 1/1,000 of production's size, so they fill in a few decades. Plots grow with the editions, up to the largest each allows, so that 21 editions can fill: real plots are far smaller (see the Countries tab). Each land takes a large share of these small editions, and many covenants reach the 1,000,000 TR3 cap: what they cannot mint is burned.",
+    { fillLand: true, landGrowsWithEditions: true, arrivalsPerYear: 30 }, COUNTRIES_V12, { editionScale: 100 }),
+  make("good-day", "A good day, every edition", "Nothing goes wrong: no challenges, cancellations or lapses, verifiers on time, every review window attested, every EFT sold. Landowners arrive until all 21 editions have filled, none of them by the clock. Editions are 1/5,000 of production's size, so they fill in a few years. Plots grow with the editions, up to the largest each allows, so that 21 editions can fill: real plots are far smaller (see the Countries tab). Each land takes a large share of these small editions, and many covenants reach the 1,000,000 TR3 cap: what they cannot mint is burned.",
+    { fillLand: true, landGrowsWithEditions: true, arrivalsPerYear: 40, cancelPct: 0, claimLapsePct: 0, abandonPct: 0, preMintChallengePct: 0, unsoldPct: 0,
       pathBLapseNothingPct: 0, pathBLapseUnattestedPct: 0, attestPct: 100, challengePct: 0, onTimePct: 100, littleLatePct: 0,
       blockPermille: 0, governanceCalendar: false, refusePct: 0, kycLatePct: 0, landSalePermille: 0 }, COUNTRIES_V12, { editionScale: 20 }),
   make("slow-uptake", "Slow uptake: TR3 burned", "Production editions and only three landowners a year for thirty years. The first editions fill; from then on each runs out its eight years unfilled, and the TR3 no land took is burned.",
@@ -286,8 +297,8 @@ export const SCENARIOS: Scenario[] = [
     { arrivalYears: 8, onTimePct: 40, littleLatePct: 30, attestPct: 25, challengePct: 5 }),
   make("pathb", "Path B lapses", "Brazil only: sales held in escrow until the recording is attested, with many recordings missing or unattested.",
     { arrivalYears: 6, pathBLapseNothingPct: 30, pathBLapseUnattestedPct: 30 }, onlyCountry(76)),
-  make("edition-race", "Edition race", "Editions 1/5,000 of production's size and many landowners: editions fill within months, and one land often runs across two or more of them. Plots keep production's sizes, so each land takes a large share of these small editions and many covenants reach the 1,000,000 TR3 cap: what they cannot mint is burned.",
-    { fillLand: true, arrivalsPerYear: 80 }, COUNTRIES_V12, { editionScale: 20 }),
+  make("edition-race", "Edition race", "Editions 1/5,000 of production's size and many landowners: editions fill within months, and one land often runs across two or more of them. Plots grow with the editions, up to the largest each allows, so that 21 editions can fill: real plots are far smaller (see the Countries tab). Many covenants reach the 1,000,000 TR3 cap: what they cannot mint is burned.",
+    { fillLand: true, landGrowsWithEditions: true, arrivalsPerYear: 80 }, COUNTRIES_V12, { editionScale: 20 }),
   make("breaches", "Breaches and cancellations", "One verification in ten finds a breach; half the blocks before a sale end in cancellation, and term challenges mostly allege the landowner's breach (3D).",
     { arrivalYears: 6, blockPermille: 100, cancelOfBlockPct: 50, termOutcomes: [30, 60, 5, 5], termOptions: [5, 15, 10, 70] }),
   make("custom", "Custom", "Start from the defaults and set everything yourself.", {}),
@@ -330,8 +341,9 @@ export function validate(s: Scenario): string[] {
     if (codes.has(k.code)) e.push(`Country ${k.code} appears twice.`);
     codes.add(k.code);
     if (!(k.code > 0 && k.code < 1000)) e.push(`${k.name}: the ISO numeric code must be 1-999.`);
-    for (const f of ["flowId", "minTerm", "maxTerm", "listingDays", "postSaleDays", "baseFee", "deskRate", "allowanceFixed", "allowancePerHa", "holders", "orgsPerHolder", "verifiersPerOrg", "weight"] as const)
+    for (const f of ["flowId", "minTerm", "maxTerm", "listingDays", "postSaleDays", "baseFee", "deskRate", "allowanceFixed", "allowancePerHa", "typicalHa", "largestHa", "valuePerHaYear", "holders", "orgsPerHolder", "verifiersPerOrg", "weight"] as const)
       if (!Number.isFinite(k[f]) || k[f] < 0) e.push(`${k.name}: ${f} must be a number, 0 or more.`);
+    if (!(k.typicalHa >= 0.01 && k.largestHa >= k.typicalHa)) e.push(`${k.name}: the typical plot must be at least 0.01 ha, and the largest at least the typical.`);
     if (k.minTerm < 3 || k.maxTerm > 100 || k.minTerm > k.maxTerm) e.push(`${k.name}: terms must run within 3-100 years, minimum first.`);
     if (!s.flows.some((f) => f.id === k.flowId)) e.push(`${k.name}: flow ${k.flowId} is not defined.`);
     const f = s.flows.find((x) => x.id === k.flowId);

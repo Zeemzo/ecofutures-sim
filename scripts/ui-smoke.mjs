@@ -17,6 +17,11 @@ const CHROME = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/M
 const PAGE_PORT = 4317;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// every chain and the page server stop however the test ends
+const chains = new Set();
+const stopAll = () => { for (const c of chains) c.kill(); preview?.kill(); };
+process.on("exit", stopAll);
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => process.exit(1));
 const preview = spawn("npx", ["vite", "preview", "--port", String(PAGE_PORT), "--strictPort", "--host", "127.0.0.1"], { stdio: "ignore" });
 for (let i = 0; ; i++) { // until the page is served
   try { if ((await fetch(`http://127.0.0.1:${PAGE_PORT}/`)).ok) break; } catch {}
@@ -49,12 +54,16 @@ function v1File() {
 }
 
 async function attempt(label, prepare, port) {
-  const node = spawn("anvil", ["--auto-impersonate", "--timestamp", "1767225600", "--port", String(port), "--gas-limit", "100000000", "--silent"], { stdio: "ignore" });
+  // as the desktop app starts it: without --prune-history anvil keeps every state on disk (gigabytes a run)
+  const node = spawn("anvil", ["--auto-impersonate", "--timestamp", "1767225600", "--port", String(port), "--gas-limit", "100000000", "--prune-history", "64", "--silent"], { stdio: "ignore" });
+  chains.add(node);
   await sleep(1000);
   const ctx = await browser.createBrowserContext(); // its own storage, as a first launch
   const page = await ctx.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e.message ?? e)));
+  const consoleErrors = [];
+  page.on("console", (m) => { if (m.type() === "error") consoleErrors.push(m.text()); });
   const t0 = Date.now();
   let result;
   try {
@@ -87,21 +96,24 @@ async function attempt(label, prepare, port) {
       } catch {}
       for (let still = 0, d = ""; still < 3; ) { await sleep(1_000); const x = await text("clockDate"); still = x === d ? still + 1 : 0; d = x; }
       const d2 = await text("clockDate"), acts = await text("sActions"), anoms = await text("sAnomalies");
+      const day = (d) => /\d{1,2} \w+ \d{4}/.exec(d)?.[0] ?? d;
       const year = (d) => Number(/\b(\d{4})\b/.exec(d)?.[1] ?? 0);
       // a run whose last term has ended stops its clock there, and says so
       const over = /programme is over/i.test(await text("clockSub"));
       const played = Date.parse(d1) > Date.parse(d0), travelled = over || Date.parse(d2) - Date.parse(d1) > 360 * 86400_000;
       const quiet = /^0 /.test(anoms.trim());
-      result = { ok: played && travelled && quiet, note: `played ${d0.slice(5, 16)} → ${d1.slice(5, 16)}, +1 yr → ${d2.slice(5, 16)}${over ? " (the programme is over)" : ""}; ${acts} transactions, ${anoms}` };
+      result = { ok: played && travelled && quiet, note: `played ${day(d0)} → ${day(d1)}, +1 yr → ${day(d2)}${over ? " (the programme is over)" : ""}; ${acts} transactions, ${anoms}` };
       void year;
     }
   } catch (e) {
     result = { ok: false, note: String(e.message ?? e) };
   }
   if (errors.length && result.ok) result = { ok: false, note: `page error: ${errors[0]}` };
+  if (consoleErrors.length) result.note += ` [${consoleErrors.length} console errors, first: ${consoleErrors[0].slice(0, 160)}]`;
   console.log(`${label.padEnd(34)} ${result.ok ? "ok  " : "FAIL"}  ${Math.round((Date.now() - t0) / 1000)}s  ${result.note}`);
-  await ctx.close();
+  await ctx.close().catch(() => {});
   node.kill();
+  chains.delete(node);
   return result.ok;
 }
 
@@ -112,7 +124,7 @@ let port = 8870, failed = 0;
 for (const id of ids.filter((x) => !wanted.length || wanted.includes(x))) {
   if (!(await attempt(id, (p) => p.click(`[data-scenario="${id}"]`), ++port))) failed++;
 }
-if (!wanted.length) {
+if (!wanted.length || wanted.includes("v1file")) {
   const file = v1File();
   const load = async (p) => {
     const input = await p.$("#importCfg");

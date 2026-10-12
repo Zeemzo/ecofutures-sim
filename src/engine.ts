@@ -456,11 +456,21 @@ export class Engine {
     }
     const minLand = N(await read("tree", "minLandUnits"));
     const maxLand = N(await read("tree", "maxLandUnits"));
-    let land = minLand + Math.floor(((maxLand - minLand) * this.rand(1000) ** 2) / 1_000_000);
+    let land: number;
+    if (this.b.landGrowsWithEditions) land = minLand + Math.floor(((maxLand - minLand) * this.rand(1000) ** 2) / 1_000_000);
+    else {
+      // the country's plots: log-normal about the typical size, one in a hundred as large as the largest
+      const k = this.countryConfig(country);
+      const sigma = Math.log(Math.max(k.largestHa / k.typicalHa, 1.0001)) / 2.326;
+      const ha = Math.min(k.largestHa, k.typicalHa * Math.exp(sigma * this.normal()));
+      land = Math.min(maxLand, Math.max(minLand, Math.round(ha * 100)));
+    }
     let [lo, hi] = (await read<[number, number]>("countries", "termRange", [country, BigInt(land)])).map(N);
     hi = Math.min(hi, Math.max(lo, this.b.maxTermYears));
-    if (lo > hi) {
-      land = minLand;
+    // no term the country allows fits the plot under the edition's limit (100 x F ha-yr): the landowner offers the
+    // largest part of it that one does -- the country's shortest term on as much land as the limit allows
+    for (let i = 0; lo > hi && i < 24 && land > minLand; i++) {
+      land = Math.max(minLand, Math.floor(land * 0.8));
       [lo, hi] = (await read<[number, number]>("countries", "termRange", [country, BigInt(land)])).map(N);
       hi = Math.min(hi, Math.max(lo, this.b.maxTermYears));
     }
@@ -728,9 +738,23 @@ export class Engine {
 
   /** A starting price the Market accepts: at least the yearly floor (FM p8). It is paid twice a year once it reaches
    *  both USD 500 x (2T + 1) and the twice-a-year floor (O2), else yearly. */
+  /** What the landowner asks: the land's worth to patrons -- hectares x years x the country's value, give or take
+   *  -- and never below the protocol's floor, which a small plot's price sits a little above. */
   async startPrice(country: number, land: bigint, term: number): Promise<bigint> {
     const q = await read("lens", "quote", [country, land, term, 50]);
-    return q.priceFloor + (q.priceFloor * BigInt(this.rand(150))) / 100n;
+    const k = this.countryConfig(country);
+    const worth = BigInt(Math.round((Number(land) / 100) * term * k.valuePerHaYear * ((70 + this.rand(81)) / 100) * 1e6)) * 10n ** 12n;
+    return worth > q.priceFloor ? worth : q.priceFloor + (q.priceFloor * BigInt(this.rand(50))) / 100n;
+  }
+
+  private countryConfig(code: number): { typicalHa: number; largestHa: number; valuePerHaYear: number } {
+    return this.sc.countries.find((c) => c.code === code) ?? { typicalHa: 10, largestHa: 500, valuePerHaYear: 50 };
+  }
+
+  /** A standard normal draw from the run's seeded generator (Box-Muller). */
+  private normal(): number {
+    const u = (this.rand(1_000_000) + 1) / 1_000_001, v = (this.rand(1_000_000) + 1) / 1_000_001;
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
   }
 
   async sale(rid: number, r: any, t: number): Promise<void> {

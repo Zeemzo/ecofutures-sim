@@ -15,6 +15,7 @@ const BEHAVIOUR: Group[] = [
   { title: "The run", fields: [
     { path: "behaviour.arrivalsPerYear", label: "Landowners a year", min: 0.1, max: 2000, step: 0.5 },
     { path: "behaviour.fillLand", label: "Run until the programme closes (all 21 editions)", kind: "check" },
+    { path: "behaviour.landGrowsWithEditions", label: "Plots grow with the editions, up to the largest each allows (to fill all 21; real plots are far smaller)", kind: "check" },
     { path: "behaviour.arrivalYears", label: "Otherwise, years of arrivals", unit: "years", min: 0, max: 200 },
     { path: "behaviour.maxRequests", label: "At most this many requests (0 = no limit)", min: 0, max: 100000 },
     { path: "behaviour.maxTermYears", label: "Longest term a landowner asks for", unit: "years", min: 3, max: 100 },
@@ -74,6 +75,8 @@ const COUNTRY_COLS: { key: keyof CountryConfig; label: string; w?: string; min?:
   { key: "listingDays", label: "Listing days", min: 1 }, { key: "postSaleDays", label: "Post-sale days", min: 0 },
   { key: "baseFee", label: "V (0 = default)", min: 0 }, { key: "deskRate", label: "D (0 = V × 4/50)", min: 0 },
   { key: "allowanceFixed", label: "Allowance, fixed", min: 0 }, { key: "allowancePerHa", label: "Allowance per ha", min: 0 },
+  { key: "typicalHa", label: "Typical plot (ha)", min: 0.01 }, { key: "largestHa", label: "Largest plot (ha)", min: 0.01 },
+  { key: "valuePerHaYear", label: "Value per ha a year", min: 0 },
   { key: "holders", label: "Trust Admins", min: 1, max: 9 }, { key: "orgsPerHolder", label: "Orgs each", min: 1, max: 9 },
   { key: "verifiersPerOrg", label: "Verifiers per org", min: 1, max: 4 }, { key: "weight", label: "Share of arrivals", min: 0 },
 ];
@@ -128,7 +131,7 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
       const td = (inner: string, cls = "") => `<td data-label="${esc(col.label)}"${cls ? ` class="${cls}"` : ""}>${inner}</td>`;
       if (col.key === "flowId") return td(`<select data-country="${i}" data-key="flowId" aria-label="${esc(c.name)}: flow">${flowOpts(c.flowId)}</select>`, "wide");
       if (col.key === "name" || col.key === "short") return td(`<input type="text" data-country="${i}" data-key="${col.key}" value="${esc(String(v))}" style="width:${col.w}" aria-label="${esc(c.name)}: ${esc(col.label)}">`, col.key === "name" ? "wide" : "");
-      return td(`<input type="number" data-country="${i}" data-key="${col.key}" value="${v}" min="${col.min ?? 0}" ${col.max ? `max="${col.max}"` : ""} style="width:${col.w ?? "72px"}" aria-label="${esc(c.name)}: ${esc(col.label)}">`);
+      return td(`<input type="number" data-country="${i}" data-key="${col.key}" value="${v}" min="${col.min ?? 0}" ${col.max ? `max="${col.max}"` : ""} step="any" style="width:${col.w ?? "72px"}" aria-label="${esc(c.name)}: ${esc(col.label)}">`);
     }).join("")}<td class="act"><button type="button" class="ghost" data-remove="${i}" aria-label="Remove ${esc(c.name)}">Remove</button></td></tr>`).join("");
     // the flows: each a sequence of steps, edited here and checked against the contracts' own rules
     const stepOpts = (sel: number) => StepName.map((n, k) => (k === 0 ? "" : `<option value="${k}" ${k === sel ? "selected" : ""}>${esc(n[0].toUpperCase() + n.slice(1))}</option>`)).join("");
@@ -198,7 +201,7 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
       const iso = ALL_COUNTRIES.find(([n]) => n === code);
       const [name, short] = KNOWN_COUNTRIES[code] ?? (iso ? [iso[2], iso[1]] : [`Country ${code}`, `C${code}`.slice(0, 3)]);
       sc.countries.push({ code, name, short, flowId: 2, minTerm: 3, maxTerm: 100, listingDays: 358, postSaleDays: 0, baseFee: 0,
-        deskRate: 0, allowanceFixed: 30, allowancePerHa: 2, holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 20 });
+        deskRate: 0, allowanceFixed: 30, allowancePerHa: 2, typicalHa: 10, largestHa: 500, valuePerHaYear: 50, holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 20 });
       persist(); render();
       return;
     }
