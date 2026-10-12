@@ -85,7 +85,8 @@ const set = (o: any, path: string, v: unknown) => {
   const last = ks.pop()!;
   ks.reduce((x, k) => x[k], o)[last] = v;
 };
-const STORE = "ecofutures-setup-v1";
+// v2 from 2.0.0 (V12): a setup remembered by 1.x holds V11's flows and countries, so it is not restored
+const STORE = "ecofutures-setup-v2";
 
 export type Choice = { scenario: Scenario; seed: number };
 

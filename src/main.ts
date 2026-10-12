@@ -884,7 +884,8 @@ async function travelTo(target: number) {
       S.busy = false;
     }
   }
-  if (target > S.chainAt) {
+  if (target > S.chainAt && S.ended) toast("The programme is over. Go back in time, or Reset to run another.");
+  else if (target > S.chainAt) {
     S.travelTarget = target;
     renderClock();
     toast(`Travelling to ${dateOf(target)}. Press Pause to stop on the way.`);

@@ -142,6 +142,7 @@ RPC=http://127.0.0.1:8546 SCENARIO=fifteen SEED=1 YEARS=40 npx tsx scripts/headl
 RPC=http://127.0.0.1:8546 SCENARIO=fifteen YEARS=4 npx tsx scripts/travel.ts             # back in time and replay: must match
 RPC=http://127.0.0.1:8545 NAME=live npx tsx scripts/audit.ts                           # audit a run from the chain alone: V12's rules
 npx tsx scripts/matrix.ts                                                              # every configuration, each run and audited
+npm run test:ui                                                                        # the app in Chrome: every scenario (and a 1.x settings file) at production settings, deployed, played and a year on
 python3 sim/check_behaviour.py                                                         # each behaviour setting against the chain
 python3 sim/build_matrix.py                                                            # sim/report/matrix.html
 ```
@@ -161,4 +162,5 @@ python3 sim/build_matrix.py                                                     
 | `electron/` | the desktop app: starts its own anvil, opens the built app against it |
 | `android/` | the Android app: the same, in a WebView, with anvil's static Linux build and a launcher for it |
 | `scripts/audit.ts` | audits any run from the chain alone against the protocol's rules |
+| `scripts/ui-smoke.mjs` | drives the setup screen and the clock in a real browser, as a tester would |
 | `sim/` | analysis of the runs the scripts write to `sim/out/` |

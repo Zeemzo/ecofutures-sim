@@ -295,7 +295,12 @@ export const SCENARIOS: Scenario[] = [
 
 export function cloneScenario(s: Scenario): Scenario {
   const c = clone(s);
-  c.behaviour = { ...DEFAULT_BEHAVIOUR, ...c.behaviour }; // a file saved before a setting existed takes its default
+  // settings saved by an earlier version (a file, or the app's own memory of the last setup) take the default for
+  // anything added since: a 1.x country has no allowance, and a missing number reached the deploy as undefined
+  c.behaviour = { ...DEFAULT_BEHAVIOUR, ...c.behaviour };
+  c.contracts = { ...PRODUCTION, ...c.contracts };
+  c.countries = (c.countries ?? []).map((k) => country(k));
+  if (!c.flows?.length) c.flows = clone(FLOWS);
   return c;
 }
 
@@ -325,6 +330,8 @@ export function validate(s: Scenario): string[] {
     if (codes.has(k.code)) e.push(`Country ${k.code} appears twice.`);
     codes.add(k.code);
     if (!(k.code > 0 && k.code < 1000)) e.push(`${k.name}: the ISO numeric code must be 1-999.`);
+    for (const f of ["flowId", "minTerm", "maxTerm", "listingDays", "postSaleDays", "baseFee", "deskRate", "allowanceFixed", "allowancePerHa", "holders", "orgsPerHolder", "verifiersPerOrg", "weight"] as const)
+      if (!Number.isFinite(k[f]) || k[f] < 0) e.push(`${k.name}: ${f} must be a number, 0 or more.`);
     if (k.minTerm < 3 || k.maxTerm > 100 || k.minTerm > k.maxTerm) e.push(`${k.name}: terms must run within 3-100 years, minimum first.`);
     if (!s.flows.some((f) => f.id === k.flowId)) e.push(`${k.name}: flow ${k.flowId} is not defined.`);
     const f = s.flows.find((x) => x.id === k.flowId);
