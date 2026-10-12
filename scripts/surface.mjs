@@ -24,7 +24,7 @@ const CONTRACTS = [
 const KEY_OF_INTERFACE = {
   IEcoAdmin: "admin", IEcoCountries: "countries", IEcoRegistry: "registry", IEcoDeeds: "deeds", IEcoCore: "core",
   IEcoBank: "bank", IEcoChallenge: "challenge", IEcoGovernance: "governance", ITree: "tree", IEcoTree: "tree",
-  IEcoToken: "token",
+  IEcoToken: "token", IEcoMarket: "market", IEcoParties: "parties", IEcoOvercharge: "overcharge", IEcoLens: "lens",
 };
 // Plumbing every contract has: hidden unless asked for.
 const PLUMBING = new Set(["initialize", "sync", "directory", "pause", "unpause", "paused", "upgradeTo", "upgradeToAndCall",
@@ -93,11 +93,15 @@ function callsFrom(key, src) {
   return callsOf(src).filter((c) => c.to !== key);
 }
 
-const files = Object.fromEntries(readdirSync(join(v11, "src")).filter((f) => f.endsWith(".sol")).map((f) => [f, readFileSync(join(v11, "src", f), "utf8")]));
+// every source file under src/, by its path there (V12 keeps them in folders: protocol/, token/, common/ ...)
+const files = Object.fromEntries(readdirSync(join(v11, "src"), { recursive: true }).filter((f) => f.endsWith(".sol")).map((f) => [f, readFileSync(join(v11, "src", f), "utf8")]));
+const sourceOf = (name) => Object.entries(files).find(([f]) => f === `${name}.sol` || f.endsWith(`/${name}.sol`))?.[1];
 const contracts = CONTRACTS.map(([key, name]) => {
   const art = JSON.parse(readFileSync(join(v11, "out", `${name}.sol`, `${name}.json`), "utf8"));
   // the contract's own source, then its base's: pause, unpause, sync and the upgrade gate live in EcoBase
-  const src = (files[`${name}.sol`] ?? "") + "\n" + readFileSync(join(v11, "src", "common", "EcoBase.sol"), "utf8");
+  const own = sourceOf(name);
+  if (!own) throw new Error(`no source for ${name} under ${join(v11, "src")}`);
+  const src = own + "\n" + readFileSync(join(v11, "src", "common", "EcoBase.sol"), "utf8");
   const user = art.metadata?.output?.userdoc ?? {}, dev = art.metadata?.output?.devdoc ?? {};
   const fns = art.abi.filter((i) => i.type === "function").map((f) => {
     const sig = sigOf(f);

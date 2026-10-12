@@ -53,13 +53,16 @@ function v1File() {
   return file;
 }
 
-async function attempt(label, prepare, port) {
+async function attempt(label, prepare, port, phone = false) {
   // as the desktop app starts it: without --prune-history anvil keeps every state on disk (gigabytes a run)
   const node = spawn("anvil", ["--auto-impersonate", "--timestamp", "1767225600", "--port", String(port), "--gas-limit", "100000000", "--prune-history", "64", "--silent"], { stdio: "ignore" });
   chains.add(node);
   await sleep(1000);
   const ctx = await browser.createBrowserContext(); // its own storage, as a first launch
   const page = await ctx.newPage();
+  // the Android app's WebView: a phone's width, touch, and its user agent
+  if (phone) await page.emulate({ viewport: { width: 412, height: 915, isMobile: true, hasTouch: true },
+    userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36" });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e.message ?? e)));
   const consoleErrors = [];
@@ -102,7 +105,17 @@ async function attempt(label, prepare, port) {
       const over = /programme is over/i.test(await text("clockSub"));
       const played = Date.parse(d1) > Date.parse(d0), travelled = over || Date.parse(d2) - Date.parse(d1) > 360 * 86400_000;
       const quiet = /^0 /.test(anoms.trim());
-      result = { ok: played && travelled && quiet, note: `played ${day(d0)} → ${day(d1)}, +1 yr → ${day(d2)}${over ? " (the programme is over)" : ""}; ${acts} transactions, ${anoms}` };
+      // the Contracts tab: every contract drawn, and one's details open (V12's new contracts once broke it)
+      await page.click('[data-view="explorer"]');
+      await page.waitForSelector(".node", { timeout: 15_000 }).catch(() => {});
+      const nodes = await page.$$eval(".node", (x) => x.length);
+      if (nodes) { await page.click('.node[data-key="market"]').catch(() => {}); await sleep(800); }
+      const shown = await page.$eval(".ex-head .eyebrow", (e) => e.textContent ?? "").catch(() => "");
+      const wide = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
+      const covered = await page.evaluate(() => { const s = document.querySelector(".ex-side"); return !!s && getComputedStyle(s).position === "sticky" && window.innerWidth <= 1000; });
+      const contracts = nodes === 14 && /Market/i.test(shown) && !wide && !covered;
+      await page.click('[data-view="sim"]');
+      result = { ok: played && travelled && quiet && contracts, note: `played ${day(d0)} → ${day(d1)}, +1 yr → ${day(d2)}${over ? " (the programme is over)" : ""}; ${acts} transactions, ${anoms}; Contracts tab ${contracts ? "ok" : `BROKEN (${nodes} contracts drawn, showing "${shown}")`}` };
       void year;
     }
   } catch (e) {
@@ -133,6 +146,10 @@ if (!wanted.length || wanted.includes("v1file")) {
     await sleep(500);
   };
   if (!(await attempt("a settings file saved by 1.3.0", load, ++port))) failed++;
+}
+if (!wanted.length || wanted.includes("phone")) {
+  // on a phone: the run, and the Contracts tab, readable at 412 px with nothing wider than the screen
+  if (!(await attempt("fifteen, on a phone (412 px)", (p) => p.click('[data-scenario="fifteen"]'), ++port, true))) failed++;
 }
 await browser.close();
 preview.kill();

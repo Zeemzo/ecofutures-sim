@@ -21,6 +21,7 @@ const LIMIT = 24_576;
 const SHORT: Record<string, string> = {
   admin: "Admin", countries: "Countries", registry: "Registry", deeds: "Deeds", core: "Core", bank: "Bank",
   challenge: "Challenge", governance: "Governance", tree: "Tree", token: "Token", lens: "Lens",
+  market: "Market", parties: "Parties", overcharge: "Overcharge",
 };
 
 export type ExplorerHooks = {
@@ -104,8 +105,10 @@ export function mountExplorer(root: HTMLElement, hooks: ExplorerHooks) {
   const calledBy = (k: string) => S.contracts.filter((c) => c.calls.some((x) => x.to === k));
 
   function graph(): string {
-    const W = 980, H = 420, cx = W / 2, cy = H / 2, rx = 390, ry = 165;
-    const order: Key[] = ["admin", "countries", "registry", "deeds", "core", "bank", "challenge", "governance", "tree", "token", "lens"];
+    const W = 1000, H = 480, cx = W / 2, cy = H / 2, rx = 400, ry = 190;
+    // every contract the surface lists, V12's order first; one this list does not know joins at the end
+    const known: Key[] = ["admin", "countries", "registry", "deeds", "parties", "core", "bank", "market", "challenge", "governance", "tree", "token", "overcharge", "lens"];
+    const order: Key[] = [...known.filter((k) => S.contracts.some((c) => c.key === k)), ...S.contracts.map((c) => c.key).filter((k) => !known.includes(k))];
     const pos = new Map(order.map((k, i) => {
       const a = (i / order.length) * Math.PI * 2 - Math.PI / 2;
       return [k, [cx + rx * Math.cos(a), cy + ry * Math.sin(a)]] as const;
@@ -113,7 +116,7 @@ export function mountExplorer(root: HTMLElement, hooks: ExplorerHooks) {
     const pairs = new Map<string, string[]>();
     for (const c of S.contracts) for (const x of c.calls) {
       const k = `${c.key}>${x.to}`;
-      if (!pos.has(x.to)) continue;
+      if (!pos.has(c.key) || !pos.has(x.to)) continue;
       pairs.set(k, [...(pairs.get(k) ?? []), x.fn]);
     }
     const edges = [...pairs.entries()].map(([k, fns]) => {
@@ -130,7 +133,7 @@ export function mountExplorer(root: HTMLElement, hooks: ExplorerHooks) {
       const [x, y] = pos.get(k)!;
       const c = byKey(k);
       const free = LIMIT - c.size;
-      return `<g class="node ${k === selected ? "on" : ""}" data-key="${k}" tabindex="0" role="button" aria-label="${esc(c.name)}"><rect x="${x - 78}" y="${y - 21}" width="156" height="42" rx="9"></rect><text x="${x}" y="${y - 2}" text-anchor="middle">${esc(SHORT[k])}</text><text class="sub" x="${x}" y="${y + 13}" text-anchor="middle">${c.functions.filter((f) => !f.plumbing).length} fns · ${free.toLocaleString("en-US")} B free</text></g>`;
+      return `<g class="node ${k === selected ? "on" : ""}" data-key="${k}" tabindex="0" role="button" aria-label="${esc(c.name)}"><rect x="${x - 78}" y="${y - 21}" width="156" height="42" rx="9"></rect><text x="${x}" y="${y - 2}" text-anchor="middle">${esc(SHORT[k] ?? c.name)}</text><text class="sub" x="${x}" y="${y + 13}" text-anchor="middle">${c.functions.filter((f) => !f.plumbing).length} fns · ${free.toLocaleString("en-US")} B free</text></g>`;
     }).join("");
     return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="The contracts and the calls between them">
       <defs>${["", "-out", "-in"].map((s) => `<marker id="arrow${s}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead${s}"></path></marker>`).join("")}</defs>
