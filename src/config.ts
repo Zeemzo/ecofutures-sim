@@ -58,7 +58,7 @@ export type CountryConfig = {
   allowanceFixed: number;
   allowancePerHa: number;
   /** The simulated landowners' plots: most near the typical size, one in a hundred as large as the largest
-   *  (log-normal), never above what the open edition allows. */
+   *  (log-normal), none below a tenth of the typical, and never above what the open edition allows. */
   typicalHa: number;
   largestHa: number;
   /** What patrons pay for a covenant, in USDT a hectare a year of its term (never below the protocol's floor). */

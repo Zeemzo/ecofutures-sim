@@ -130,6 +130,8 @@ export type Row = {
   challenged?: boolean; windowOpen?: boolean; windowAction?: number; price?: bigint; owner?: Address;
   /** TR3 over the whole term if nothing changes (the platform's "mint capacity"), and the Trust Admin it sits under. */
   projected?: bigint; holder?: Address;
+  /** TR3 accrued since the last release, at the score in force (Tree.rewardOf's pending). */
+  accruing?: bigint;
 };
 
 export type Census = {
@@ -142,6 +144,9 @@ export type Census = {
   /** The platform's home-page indicators: the sale prices of the EFTs sold and still standing, how many, the TR3
    *  those lands will mint over their terms, and the land-years before the next edition begins. */
   marketCap: bigint; sold: number; soldProjected: bigint; tillNextEdition: bigint;
+  /** TR3 the covenants have accrued since their last release, at the EcoScore in force (each released at its
+   *  next passing re-verification), and TR3 released but not yet claimed. */
+  tr3Accruing: bigint; tr3Owed: bigint;
   /** The open edition's size in land-years, and the TR3 burned so far by editions closed with room left. */
   capacity: bigint; burned: bigint;
 };
@@ -205,6 +210,7 @@ async function readOne(rid: number, done: boolean, at: (c: any, fn: string, args
     windowOpen: Number(w.openedAt) !== 0 && !w.settled, windowAction: Number(w.action),
     challenged: row.challenged || undecided, price: a.price || settlement?.price || ledger.price.get(rid), owner: owner ?? undefined,
     projected: reward?.allocation === undefined ? undefined : (reward.allocation * BigInt(c.ecoScore)) / 100n, holder: holder ?? undefined,
+    accruing: reward?.pending ?? 0n,
   });
   const cs = Number(c.status);
   if (row.status !== RequestStatus.ENDED || row.endReason === 7) {
@@ -260,13 +266,14 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
   ];
   const counts = {} as Record<Stage, number>;
   for (const r of rows) counts[r.stage] = (counts[r.stage] ?? 0) + 1;
-  let marketCap = 0n, sold = 0, soldProjected = 0n;
+  let marketCap = 0n, sold = 0, soldProjected = 0n, tr3Accruing = 0n;
+  for (const r of rows) tr3Accruing += r.accruing ?? 0n;
   for (const r of rows) if (standingSale(r)) { marketCap += r.price!; sold++; soldProjected += r.projected ?? 0n; }
   // editionInfo: (edition, F, land-years placed in it, its size, opened at, closes by)
   const used: bigint = info[2], capacity: bigint = info[3];
   return {
     t, block, rows, edition: Number(info[0]), landYears: placed, tr3Supply: supply, gtas: gtas.length, capacity, burned,
     registryBal, marketBal, bankBal, poolBal, registryHeld, marketHeld, bankHeld, poolHeld, reserve: sb.reserve, inv, counts, bad,
-    marketCap, sold, soldProjected, tillNextEdition: capacity > used ? capacity - used : 0n,
+    marketCap, sold, soldProjected, tillNextEdition: capacity > used ? capacity - used : 0n, tr3Accruing, tr3Owed: sb.owed,
   };
 }

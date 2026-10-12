@@ -22,7 +22,8 @@ const chains = new Set();
 const stopAll = () => { for (const c of chains) c.kill(); preview?.kill(); };
 process.on("exit", stopAll);
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => process.exit(1));
-const preview = spawn("npx", ["vite", "preview", "--port", String(PAGE_PORT), "--strictPort", "--host", "127.0.0.1"], { stdio: "ignore" });
+// vite itself, not through npx: killing npx leaves the server it starts running
+const preview = spawn(new URL("../node_modules/.bin/vite", import.meta.url).pathname, ["preview", "--port", String(PAGE_PORT), "--strictPort", "--host", "127.0.0.1"], { stdio: "ignore" });
 for (let i = 0; ; i++) { // until the page is served
   try { if ((await fetch(`http://127.0.0.1:${PAGE_PORT}/`)).ok) break; } catch {}
   if (i > 60) throw new Error("vite preview did not start");

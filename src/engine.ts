@@ -459,10 +459,11 @@ export class Engine {
     let land: number;
     if (this.b.landGrowsWithEditions) land = minLand + Math.floor(((maxLand - minLand) * this.rand(1000) ** 2) / 1_000_000);
     else {
-      // the country's plots: log-normal about the typical size, one in a hundred as large as the largest
+      // the country's plots: log-normal about the typical size, one in a hundred as large as the largest, and none
+      // below a tenth of the typical (the log-normal's lower tail runs to a few square metres)
       const k = this.countryConfig(country);
       const sigma = Math.log(Math.max(k.largestHa / k.typicalHa, 1.0001)) / 2.326;
-      const ha = Math.min(k.largestHa, k.typicalHa * Math.exp(sigma * this.normal()));
+      const ha = Math.min(k.largestHa, Math.max(k.typicalHa / 10, k.typicalHa * Math.exp(sigma * this.normal())));
       land = Math.min(maxLand, Math.max(minLand, Math.round(ha * 100)));
     }
     let [lo, hi] = (await read<[number, number]>("countries", "termRange", [country, BigInt(land)])).map(N);
@@ -883,6 +884,7 @@ export class Engine {
             if (await this.act(c.verifier, "core", "verify", [tid, 0, 0, ""], "cure", rid)) {
               this.note("cure", rid, `${nameOf(c.verifier)} finds the breach on #${rid} cured and re-verifies: the block lifts, with what it held.`);
               this.blockPlan.delete(tid);
+              await this.claimTR3(rid, tid);
             }
           }
           this.nextAt.set(rid, windowOpen ? closesAt + 1 : t + DAY);
@@ -930,6 +932,8 @@ export class Engine {
               this.note("block", rid, `${nameOf(c.verifier)} finds a breach on #${rid} and blocks it: instalments and TR3 pause.`);
             }
           }
+          // the holders claim what the verification released, as they would on seeing it
+          await this.claimTR3(rid, tid);
         }
         this.nextAt.set(rid, t + DAY);
         return;
@@ -1104,7 +1108,8 @@ export class Engine {
     const next = await this.pickSuccessor(removed, N(c.country), seat.removed);
     if (next === zeroAddress) return;
     const from = N(seat.firstClaimUntil) !== 0 ? N(seat.firstClaimUntil) : N(seat.vacantSince);
-    const holderMay = holderCan && (!seat.vacant || t <= from + this.sc.contracts.reseatDays * DAY);
+    // the Trust Admin's reseat window, with an hour's margin: the nomination lands in a block a few seconds on
+    const holderMay = holderCan && (!seat.vacant || t + 3600 <= from + this.sc.contracts.reseatDays * DAY);
     if (getAddress(await read<Address>("parties", "nominee", [tid])) !== next) {
       const ok = holderMay
         ? await this.act(holder, "parties", "nominateVerifier", [tid, next], "nominate", rid)

@@ -442,6 +442,7 @@ function renderTicker() {
     item("Transactions", S.engine.actions.toLocaleString("en-US"), "Every transaction the actors have sent"),
     item("EFTs sold", c.sold.toLocaleString("en-US"), "EFTs sold and still standing"),
     item("TR3 minted", money(c.tr3Supply, 2), "TR3 supply"),
+    item("TR3 accruing", money(c.tr3Accruing, 2), "TR3 the covenants have accrued since their last release, at the EcoScore in force. Each covenant's is released at its next passing re-verification, then minted when claimed; days past due go to the Reserve instead"),
     item("Till next edition", `${hectareYears(c.tillNextEdition)} ha-yr`, "Hectare-years of land still to place before the open edition fills; eight years after it opened it closes anyway"),
     item("TR3 burned", money(c.burned, 2), "TR3 that will never be minted: room no land took when an edition closed, and what placed lands will not mint (an EcoScore below 100, the per-covenant cap, a cancellation's forfeit, a request that ended before its covenant). Each edition's 10,000,000 is minted or burned"),
   ].join("");
@@ -458,7 +459,7 @@ function renderKpis() {
     [money(m[2] + m[3] + m[11] + m[12] + m[13]), "USDT to attesters, panels, challengers"],
     [money(c.registryBal + c.bankBal + c.poolBal), "USDT held by the protocol now"],
     [`${((k.active ?? 0) + (k.blocked ?? 0) + (k.ending ?? 0)).toLocaleString("en-US")}`, "covenants in their term"],
-    [money(c.tr3Supply), "TR3 minted"],
+    [money(c.tr3Accruing), "TR3 accruing, released at each covenant's next re-verification"],
     [`${Math.min(c.edition, LAST_EDITION)}`, `edition · ${hectareYears(c.landYears)} hectare-years placed`],
   ];
   $("kpis").innerHTML = items.map(([b, s]) => `<div class="kpi"><b>${b}</b><span>${s}</span></div>`).join("");
@@ -723,6 +724,8 @@ async function renderDrawer(rid: number, force: boolean) {
   if (!row) return;
   const L = S.ledger;
   let reward: any = null, w: any = null, ch: any = null;
+  // the edition its land took at sign-up (D17); Core records it at activation
+  const placed = row.edition ? 0 : Number((await read<readonly [number, bigint, bigint, boolean]>("tree", "placeOf", [BigInt(rid)]).catch(() => [0]))[0]);
   if (row.tokenId) {
     [reward, w] = await Promise.all([read("tree", "rewardOf", [row.tokenId]), read("challenge", "getWindow", [row.tokenId])]);
     const open = row.challenged ? await read<bigint>("challenge", "openChallengeOf", [row.tokenId]) : 0n;
@@ -734,13 +737,14 @@ async function renderDrawer(rid: number, force: boolean) {
   const fact = (k: string, v: string) => `<div><dt>${k}</dt><dd>${v}</dd></div>`;
   const facts = [
     fact("Land", hectares(row.land)), fact("Stated period", `${row.term} years`),
-    fact("EcoScore", row.score ? String(row.score) : "not yet"), fact("Edition", row.edition ? String(row.edition) : "at verification"),
+    fact("EcoScore", row.score ? String(row.score) : "not yet"), fact("Edition", row.edition ? String(row.edition) : placed ? `${placed}, placed at sign-up` : "not placed"),
     fact("Guardian", esc(nameOf(row.guardian))), fact("Verifier", esc(nameOf(row.verifier))),
     fact("Owner of the EFT", row.owner ? esc(nameOf(row.owner)) : "not minted"),
     fact("Sale price", row.price ? `${money(row.price)} USDT` : "not sold"),
     fact("Paid to the guardian", `${money(L.guardianGot.get(rid) ?? 0n)} USDT`),
     fact("TR3 minted", `${money(L.tr3.get(rid) ?? 0n)} TR3`),
   ];
+  if (reward && reward.allocation > 0n && !reward.ended) facts.push(fact("TR3 accruing", `${money(reward.pending)} TR3, released at the next re-verification`));
   if (row.termStart) facts.push(fact("Term", `${dateOf(row.termStart)} to ${dateOf(row.termEnd!)}`));
   if (reward && reward.held) facts.push(fact("TR3", "held: nothing is released until the hold lifts"));
   if (reward && reward.mE6 > 0n) facts.push(fact("Overcharged", `M = ${(Number(reward.mE6) / 1e6).toFixed(2)}, ${money(reward.boostLeft)} TR3 of boost still to pay`));
