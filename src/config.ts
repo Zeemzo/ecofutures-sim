@@ -94,6 +94,10 @@ export type Behaviour = {
   // pre-mint fates, percent of requests
   cancelPct: number;
   claimLapsePct: number;
+  /** Percent of requests no verifier claims: after the acceptance window a Trust Admin assigns one (V12.1, rule 3). */
+  unclaimedPct: number;
+  /** Percent the claiming verifier rejects: no land, or no valid title (V12.1, rule 4). */
+  rejectPct: number;
   abandonPct: number;
   preMintChallengePct: number;
   unsoldPct: number;
@@ -118,6 +122,9 @@ export type Behaviour = {
   /** Of blocks in the term, percent the landowner challenges as wrong (3E). */
   wrongBlockPct: number;
   resalePct: number;
+  /** Of the times the EFT's owner sees TR3 waiting in its pool, percent it claims; otherwise the pool grows, and a
+   *  sale passes it to the buyer (R, 14 Oct). Every last owner claims at the End Date. */
+  patronClaimPct: number;
   payeeSwitchPermille: number;
   governanceCalendar: boolean;
 };
@@ -240,7 +247,7 @@ const country = (c: Partial<CountryConfig> & Pick<CountryConfig, "code" | "name"
 export const COUNTRIES_V12: CountryConfig[] = [
   // plot sizes and values per hectare-year are placeholders until Ravi's figures are in (12 Oct)
   country({ code: 144, name: "Sri Lanka", short: "LK", flowId: 1, maxTerm: 99, holders: 3, orgsPerHolder: 2, weight: 35, typicalHa: 4, largestHa: 200, valuePerHaYear: 60 }),
-  country({ code: 360, name: "Indonesia", short: "ID", flowId: 2, maxTerm: 29, weight: 20, typicalHa: 15, largestHa: 2_000, valuePerHaYear: 30 }),
+  country({ code: 360, name: "Indonesia", short: "ID", flowId: 1, maxTerm: 29, weight: 20, typicalHa: 15, largestHa: 2_000, valuePerHaYear: 30 }),
   country({ code: 392, name: "Japan", short: "JP", flowId: 2, weight: 20, typicalHa: 3, largestHa: 150, valuePerHaYear: 80 }),
   country({ code: 76, name: "Brazil", short: "BR", flowId: 3, minTerm: 16, postSaleDays: POST_SALE_DAYS, weight: 25, typicalHa: 80, largestHa: 10_000, valuePerHaYear: 15 }),
 ];
@@ -258,13 +265,13 @@ export const DEFAULT_BEHAVIOUR: Behaviour = {
   refusePct: 2, kycLatePct: 10, kycFailPct: 20, landSalePermille: 10, accedePct: 80, relicUsePct: 50,
   termOptions: [15, 35, 20, 30], wrongBlockPct: 25,
   arrivalsPerYear: 20, fillLand: false, landGrowsWithEditions: false, arrivalYears: 15, maxRequests: 0, maxTermYears: 25,
-  cancelPct: 2, claimLapsePct: 2, abandonPct: 2, preMintChallengePct: 14, unsoldPct: 4,
+  cancelPct: 2, claimLapsePct: 2, unclaimedPct: 3, rejectPct: 1, abandonPct: 2, preMintChallengePct: 14, unsoldPct: 4,
   pathBLapseNothingPct: 8, pathBLapseUnattestedPct: 6,
   attestPct: 72, challengePct: 8,
   preMintOutcomes: [45, 30, 13, 12],
   termOutcomes: [50, 35, 8, 7],
   onTimePct: 90, littleLatePct: 7,
-  blockPermille: 15, cancelOfBlockPct: 25, resalePct: 4, payeeSwitchPermille: 15,
+  blockPermille: 15, cancelOfBlockPct: 25, resalePct: 4, patronClaimPct: 60, payeeSwitchPermille: 15,
   governanceCalendar: true,
 };
 
@@ -280,13 +287,13 @@ export const SCENARIOS: Scenario[] = [
   make("fill", "Until the programme closes", "Landowners keep arriving until all 21 editions are closed; then every term runs out and the programme ends. Editions are 1/1,000 of production's size, so they fill in a few decades. Plots grow with the editions, up to the largest each allows, so that 21 editions can fill: real plots are far smaller (see the Countries tab). Each land takes a large share of these small editions, and many covenants reach the 1,000,000 TR3 cap: what they cannot mint is burned.",
     { fillLand: true, landGrowsWithEditions: true, arrivalsPerYear: 30 }, COUNTRIES_V12, { editionScale: 100 }),
   make("good-day", "A good day, every edition", "Nothing goes wrong: no challenges, cancellations or lapses, verifiers on time, every review window attested, every EFT sold. Landowners arrive until all 21 editions have filled, none of them by the clock. Editions are 1/5,000 of production's size, so they fill in a few years. Plots grow with the editions, up to the largest each allows, so that 21 editions can fill: real plots are far smaller (see the Countries tab). Each land takes a large share of these small editions, and many covenants reach the 1,000,000 TR3 cap: what they cannot mint is burned.",
-    { fillLand: true, landGrowsWithEditions: true, arrivalsPerYear: 40, cancelPct: 0, claimLapsePct: 0, abandonPct: 0, preMintChallengePct: 0, unsoldPct: 0,
+    { fillLand: true, landGrowsWithEditions: true, arrivalsPerYear: 40, cancelPct: 0, claimLapsePct: 0, unclaimedPct: 0, rejectPct: 0, abandonPct: 0, preMintChallengePct: 0, unsoldPct: 0,
       pathBLapseNothingPct: 0, pathBLapseUnattestedPct: 0, attestPct: 100, challengePct: 0, onTimePct: 100, littleLatePct: 0,
       blockPermille: 0, governanceCalendar: false, refusePct: 0, kycLatePct: 0, landSalePermille: 0 }, COUNTRIES_V12, { editionScale: 20 }),
   make("slow-uptake", "Slow uptake: TR3 burned", "Production editions and only three landowners a year for thirty years. The first editions fill; from then on each runs out its eight years unfilled, and the TR3 no land took is burned.",
     { arrivalsPerYear: 3, arrivalYears: 30 }),
   make("one", "One covenant, start to finish", "A single Sri Lanka request with nothing going wrong: claim, verification, power, deed, mint, sale and every re-verification of its term. Use Next action to step through it.",
-    { maxRequests: 1, arrivalsPerYear: 365, cancelPct: 0, claimLapsePct: 0, abandonPct: 0, preMintChallengePct: 0, unsoldPct: 0,
+    { maxRequests: 1, arrivalsPerYear: 365, cancelPct: 0, claimLapsePct: 0, unclaimedPct: 0, rejectPct: 0, abandonPct: 0, preMintChallengePct: 0, unsoldPct: 0,
       pathBLapseNothingPct: 0, pathBLapseUnattestedPct: 0, attestPct: 100, challengePct: 0, onTimePct: 100, littleLatePct: 0, blockPermille: 0,
       resalePct: 0, payeeSwitchPermille: 0, governanceCalendar: false, maxTermYears: 5, refusePct: 0, kycLatePct: 0, landSalePermille: 0 }, onlyCountry(144)),
   make("challenges", "Challenge stress", "Half of all verifications challenged before the mint and two in five review windows challenged in the term, with every outcome equally likely.",

@@ -141,12 +141,18 @@ const FORMATS: Record<string, Fmt> = {
     `${countryName(n(a.country))}'s settings change: terms ${n(a.settings.minTermYears)} to ${n(a.settings.maxTermYears)} years, for new requests.`],
 
   // ---- editions, the Reserve and Relics ----
-  "tree.LandPlaced": (a, r) => ["term", `${r}'s land takes its place at the mint: ${ha(a.landYears)} ha-yr in edition ${n(a.edition)}, for ${tree(a.tr3AtFullScore)} at an EcoScore of 100.`],
-  "tree.PlaceReleased": (a, r) => ["money", a.roomReopened ? `${r}'s land never became a covenant: its room in edition ${n(a.edition)} reopens.`
-    : `${r}'s land never became a covenant: the ${tree(a.burned)} its place held are burned.`, true],
-  "tree.EditionClosed": (a) => ["alert", a.byClock
-    ? `Edition ${n(a.edition)}'s eight years are up with ${ha(a.landYears)} ha-yr placed: the ${tree(a.burned)} no land took are burned${n(a.edition) < 21 ? `, and edition ${n(a.edition) + 1} opens` : ", and the programme closes"}.`
-    : `Edition ${n(a.edition)} closes${a.burned > 0n ? `, its last ${tree(a.burned)} of room burned: the next land did not fit` : " full"}${n(a.edition) < 21 ? `; edition ${n(a.edition) + 1} opens` : "; the programme closes"}.`],
+  "editions.Reserved": (a, r) => ["term", `${r} takes the next place in the queue: ${ha(a.landYears)} ha-yr reserved in edition ${n(a.edition)}, the lowest with room whose limit it fits.`],
+  "editions.Moved": (a, r) => ["term", `Space freed in edition ${n(a.to)} goes to the earliest waiting request that fits: ${r} moves down from edition ${n(a.from)}.`],
+  "editions.FreedSettled": (a) => ["term", `No waiting request fits the ${ha(a.landYears)} ha-yr freed in edition ${n(a.edition)}: it opens to new requests.`, true],
+  "editions.Fixed": (a, r) => ["term", `${r}'s auction ended with a winner: its edition, ${n(a.edition)}, is fixed.`, true],
+  "editions.Unfixed": (a, r) => ["term", `${r}'s sale was called off: its edition is unfixed, and its place in the queue kept.`],
+  "editions.Sold": (a, r) => ["term", `${r} is sold in edition ${n(a.edition)}: ${tree(a.allocation)} over its term at an EcoScore of 100${a.capBurned > 0n ? `, the ${tree(a.capBurned)} above the per-land cap burned` : ""}.`, true],
+  "editions.Released": (a, r) => ["money", a.burned > 0n ? `${r} never became a covenant: its edition had closed, so the ${tree(a.burned)} its space held are burned.`
+    : `${r} never became a covenant: its ${ha(a.landYears)} ha-yr in edition ${n(a.edition)} are freed for the queue.`, true],
+  "editions.EditionOpened": (a) => ["alert", `Edition ${n(a.edition)} opens: its eight-year clock starts.`],
+  "editions.EditionClosed": (a) => ["alert", a.byClock
+    ? `Edition ${n(a.edition)}'s eight years are up: the ${tree(a.burned)} no request reserved are burned; its ${ha(BigInt(a.reserved) - BigInt(a.sold))} ha-yr still reserved can still sell.`
+    : `Edition ${n(a.edition)} is sold out and closes.`],
   "tree.StreamReleased": (a, r) => ["money", `${r} releases ${tree(a.amount)} at an EcoScore of ${n(a.score)}.`, true],
   "tree.ReserveCredited": (a, r) => ["money", `${tree(a.amount)} of ${r}'s allocation goes to the Overcharge Reserve (${["the score's shortfall", "days blocked", "a breach", "an early end", "an unpaid boost"][n(a.source)]}).`, true],
   "tree.BoostPaid": (a, r) => ["money", `${r} is boosted ${tree(a.amount)} from its overcharge.`, true],
@@ -157,11 +163,13 @@ const FORMATS: Record<string, Fmt> = {
   "overcharge.Transmuted": (a) => ["money", `Two Relics are transmuted into one of edition ${n(a.edition)}, with a cap of ${tree(a.cap)}.`],
 
   // ---- TR3, resale ----
-  "tree.RewardClaimed": (a, r) => ["money",
-    `TR3 is claimed on ${r}: ${tree(a.patronAmount)} to ${nameOf(a.patron)}, ${tree(a.guardianAmount)} to ${nameOf(a.guardian)}${a.referrerAmount > 0n ? `, ${tree(a.referrerAmount)} to ${nameOf(a.referrer)}` : ""}.`, true],
+  "tree.RewardClaimed": (a, r) => ["money", a.patronAmount > 0n
+    ? `${nameOf(a.patron)} claims ${r}'s pool: ${tree(a.patronAmount)}.`
+    : `TR3 is claimed on ${r}: ${tree(a.guardianAmount)} to ${nameOf(a.guardian)}${a.referrerAmount > 0n ? `, ${tree(a.referrerAmount)} to ${nameOf(a.referrer)}` : ""}.`, true],
   "token.Listed": (a, r) => ["money", `${nameOf(a.seller)} lists ${r} for sale at ${usd(a.price)}.`],
   "token.ListingCancelled": (_a, r) => ["money", `${r} is taken off sale.`, true],
-  "token.OfferMade": (a, r) => ["money", `${nameOf(a.buyer)} offers ${usd(a.price)} for ${r}.`],
+  "token.OfferMade": (a, r) => ["money", `${nameOf(a.buyer)} offers ${usd(a.price)} for ${r}, until ${dateOf(n(a.expiry))}.`],
+  "token.OrdersVoided": (_a, r) => ["money", `${r}'s open listing and offers are void: what it carries changed.`, true],
   "token.OfferWithdrawn": (a, r) => ["money", `${nameOf(a.buyer)} withdraws an offer on ${r}.`, true],
   "token.Sold": (a, r) => ["money", a.byOffer
     ? `${nameOf(a.seller)} accepts ${nameOf(a.buyer)}'s offer: ${r} sold for ${usd(a.price)}.`

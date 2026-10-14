@@ -17,7 +17,7 @@ const proxyAbi = (code as any).proxyAbi as Abi;
 type Ref = { ref: "admin" | "usdt" | "feeWallet" };
 /** One argument of an initializer: the value sent, and how the setup screen shows it. */
 export type PlanArg = { value: unknown; shown: string };
-/** The thirteen proxies in the order they are deployed, each with what its initializer is given. The setup screen
+/** The fourteen proxies in the order they are deployed (EcoEditions last, so the others keep their addresses), each with what its initializer is given. The setup screen
  *  shows this plan and deploy() sends it, so what is shown is what is deployed. */
 export function initPlan(s: Scenario): { key: Key; args: PlanArg[] }[] {
   const k = s.contracts;
@@ -38,9 +38,10 @@ export function initPlan(s: Scenario): { key: Key; args: PlanArg[] }[] {
     { key: "parties", args: [admin] },
     { key: "challenge", args: [admin, usdt, days(k.reviewDays), days(k.responseDays), days(k.panelDays), days(k.redrawDays), { value: k.haltAfter, shown: `${k.haltAfter} unattested windows in a row` }] },
     { key: "governance", args: [admin] },
-    { key: "tree", args: [admin, text("Tree"), text("TR3"), { value: BigInt(k.editionScale), shown: `${k.editionScale.toLocaleString("en-US")} land-years × F²` }] },
+    { key: "tree", args: [admin, text("Tree"), text("TR3")] },
     { key: "token", args: [admin, text("EcoFutures"), text("EFT"), usdt] },
     { key: "overcharge", args: [admin, text("EcoFutures Relic"), text("RELIC")] },
+    { key: "editions", args: [admin, { value: BigInt(k.editionScale), shown: `${k.editionScale.toLocaleString("en-US")} land-years × F²` }] },
   ];
 }
 
@@ -59,7 +60,7 @@ export async function deploy(s: Scenario, progress: (msg: string) => void = () =
   const forwarder = await make(C.forwarder, [] as Abi);
   const server = labelAddress("server"), feeWallet = labelAddress("foundationWallet"), emergency = labelAddress("emergency");
 
-  progress("Deploying the thirteen contracts behind their proxies");
+  progress("Deploying the fourteen contracts behind their proxies");
   const d = {} as Record<string, Address>;
   const known: Record<Ref["ref"], () => Address> = { admin: () => d.admin, usdt: () => usdt, feeWallet: () => feeWallet };
   for (const { key, args } of initPlan(s)) {
@@ -72,8 +73,9 @@ export async function deploy(s: Scenario, progress: (msg: string) => void = () =
   await call("admin", "setDirectory", [{
     admin, countries: d.countries, registry: d.registry, deeds: d.deeds, core: d.core, bank: d.bank, challenge: d.challenge,
     governance: d.governance, tree: d.tree, token: d.token, market: d.market, parties: d.parties, overcharge: d.overcharge,
+    editions: d.editions,
   }]);
-  for (const key of ["countries", "registry", "deeds", "core", "bank", "market", "parties", "challenge", "governance", "tree", "token", "overcharge"] as Key[]) await call(key, "sync");
+  for (const key of ["countries", "registry", "deeds", "core", "bank", "market", "parties", "challenge", "governance", "tree", "token", "overcharge", "editions"] as Key[]) await call(key, "sync");
   const lens = await make(C.lens, abis.lens, [admin]);
 
   progress("Setting the clocks");

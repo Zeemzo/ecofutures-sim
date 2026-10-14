@@ -114,7 +114,7 @@ async function attempt(label, prepare, port, phone = false) {
       const shown = await page.$eval(".ex-head .eyebrow", (e) => e.textContent ?? "").catch(() => "");
       const wide = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
       const covered = await page.evaluate(() => { const s = document.querySelector(".ex-side"); return !!s && getComputedStyle(s).position === "sticky" && window.innerWidth <= 1000; });
-      const contracts = nodes === 14 && /Market/i.test(shown) && !wide && !covered;
+      const contracts = nodes === 15 && /Market/i.test(shown) && !wide && !covered;
       await page.click('[data-view="sim"]');
       result = { ok: played && travelled && quiet && contracts, note: `played ${day(d0)} → ${day(d1)}, +1 yr → ${day(d2)}${over ? " (the programme is over)" : ""}; ${acts} transactions, ${anoms}; Contracts tab ${contracts ? "ok" : `BROKEN (${nodes} contracts drawn, showing "${shown}")`}` };
       void year;

@@ -185,7 +185,7 @@ async function setupProgramme({ scenario, seed }: Choice) {
     S.chainAt = b.timestamp;
     S.engine.begin(b.timestamp);
     S.nextSample = b.timestamp;
-    S.fullAt = await read<bigint>("tree", "programmeCapacity");
+    S.fullAt = await read<bigint>("editions", "programmeCapacity");
     const changed = TIMINGS.filter((k) => scenario.contracts[k] !== PRODUCTION[k]).length
       + scenario.countries.filter((c) => c.listingDays !== LISTING_DAYS).length;
     $("sScale").textContent = `${scenario.name} · ${changed ? `${changed} setting${changed === 1 ? "" : "s"} changed from production` : "production settings"}`;
@@ -725,7 +725,7 @@ async function renderDrawer(rid: number, force: boolean) {
   const L = S.ledger;
   let reward: any = null, w: any = null, ch: any = null;
   // the edition its land took at sign-up (D17); Core records it at activation
-  const placed = row.edition ? 0 : Number((await read<readonly [number, bigint, bigint, boolean]>("tree", "placeOf", [BigInt(rid)]).catch(() => [0]))[0]);
+  const placed = row.edition ? 0 : Number((await read<any>("editions", "reservationOf", [BigInt(rid)]).catch(() => ({ edition: 0 }))).edition);
   if (row.tokenId) {
     [reward, w] = await Promise.all([read("tree", "rewardOf", [row.tokenId]), read("challenge", "getWindow", [row.tokenId])]);
     const open = row.challenged ? await read<bigint>("challenge", "openChallengeOf", [row.tokenId]) : 0n;
@@ -737,7 +737,7 @@ async function renderDrawer(rid: number, force: boolean) {
   const fact = (k: string, v: string) => `<div><dt>${k}</dt><dd>${v}</dd></div>`;
   const facts = [
     fact("Land", hectares(row.land)), fact("Stated period", `${row.term} years`),
-    fact("EcoScore", row.score ? String(row.score) : "not yet"), fact("Edition", row.edition ? String(row.edition) : placed ? `${placed}, placed at sign-up` : "not placed"),
+    fact("EcoScore", row.score ? String(row.score) : "not yet"), fact("Edition", row.edition ? String(row.edition) : placed ? `${placed}, reserved (provisional until the auction ends)` : "not placed"),
     fact("Guardian", esc(nameOf(row.guardian))), fact("Verifier", esc(nameOf(row.verifier))),
     fact("Owner of the EFT", row.owner ? esc(nameOf(row.owner)) : "not minted"),
     fact("Sale price", row.price ? `${money(row.price)} USDT` : "not sold"),

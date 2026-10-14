@@ -24,6 +24,8 @@ const BEHAVIOUR: Group[] = [
   { title: "Before the mint", note: "Percent of requests. The rest go through normally.", fields: [
     { path: "behaviour.cancelPct", label: "The guardian cancels before a verifier claims it", unit: "%" },
     { path: "behaviour.claimLapsePct", label: "The claiming verifier lets the claim lapse", unit: "%" },
+    { path: "behaviour.unclaimedPct", label: "No verifier claims it: a Trust Admin assigns one after the acceptance window", unit: "%" },
+    { path: "behaviour.rejectPct", label: "The verifier rejects it: no land, or no valid title", unit: "%" },
     { path: "behaviour.abandonPct", label: "The guardian abandons after the verification", unit: "%" },
     { path: "behaviour.preMintChallengePct", label: "Challenged in the watchdog window", unit: "%" },
     { path: "behaviour.unsoldPct", label: "Nobody bids: closes unsold", unit: "%" },
@@ -40,6 +42,7 @@ const BEHAVIOUR: Group[] = [
     { path: "behaviour.blockPermille", label: "A re-verification finds a breach and blocks", unit: "per 1,000", max: 1000 },
     { path: "behaviour.cancelOfBlockPct", label: "Of the blocks, end in cancellation", unit: "%" },
     { path: "behaviour.resalePct", label: "An EFT is resold, each year", unit: "%" },
+    { path: "behaviour.patronClaimPct", label: "The owner claims its waiting TR3 (else its pool passes to a buyer)", unit: "%" },
     { path: "behaviour.payeeSwitchPermille", label: "The land changes hands, each year", unit: "per 1,000", max: 1000 },
   ] },
 ];

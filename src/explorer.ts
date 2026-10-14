@@ -21,7 +21,7 @@ const LIMIT = 24_576;
 const SHORT: Record<string, string> = {
   admin: "Admin", countries: "Countries", registry: "Registry", deeds: "Deeds", core: "Core", bank: "Bank",
   challenge: "Challenge", governance: "Governance", tree: "Tree", token: "Token", lens: "Lens",
-  market: "Market", parties: "Parties", overcharge: "Overcharge",
+  market: "Market", parties: "Parties", overcharge: "Overcharge", editions: "Editions",
 };
 
 export type ExplorerHooks = {
@@ -107,7 +107,7 @@ export function mountExplorer(root: HTMLElement, hooks: ExplorerHooks) {
   function graph(): string {
     const W = 1000, H = 480, cx = W / 2, cy = H / 2, rx = 400, ry = 190;
     // every contract the surface lists, V12's order first; one this list does not know joins at the end
-    const known: Key[] = ["admin", "countries", "registry", "deeds", "parties", "core", "bank", "market", "challenge", "governance", "tree", "token", "overcharge", "lens"];
+    const known: Key[] = ["admin", "countries", "registry", "deeds", "parties", "core", "bank", "market", "challenge", "governance", "tree", "editions", "token", "overcharge", "lens"];
     const order: Key[] = [...known.filter((k) => S.contracts.some((c) => c.key === k)), ...S.contracts.map((c) => c.key).filter((k) => !known.includes(k))];
     const pos = new Map(order.map((k, i) => {
       const a = (i / order.length) * Math.PI * 2 - Math.PI / 2;

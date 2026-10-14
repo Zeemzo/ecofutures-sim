@@ -15,7 +15,7 @@ export function setCountries(list: { code: number; name: string; short: string; 
 export const countryName = (c: number) => COUNTRIES.find((x) => x.code === c)?.name ?? `country ${c}`;
 
 export const RequestStatus = { NONE: 0, OPEN: 1, CLAIMED: 2, VERIFIED: 3, IN_FLOW: 4, ENDED: 5 } as const;
-export const EndReason = ["", "cancelled", "abandoned", "failed", "unsold", "lapsed", "blocked", "completed", "refused", "not anchored", "attestation failed", "expired"];
+export const EndReason = ["", "cancelled", "abandoned", "failed", "unsold", "lapsed", "blocked", "completed", "refused", "not anchored", "attestation failed", "rejected"];
 export const COMPLETED = 7;
 export const Step = { NONE: 0, POWER: 1, POWER_ANCHOR: 2, AGREEMENT: 3, DEED: 4, RECORDING: 5, ATTEST: 6, MINT: 7, SALE: 8 } as const;
 export const StepName = ["", "power of attorney", "registering the power", "agreement", "deed", "recording", "attestation", "mint", "sale"];

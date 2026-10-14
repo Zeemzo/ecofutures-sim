@@ -234,13 +234,17 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
     if (done.has(rid)) finalParts.set(rid, p);
     return p;
   }));
-  const [registryBal, marketBal, bankBal, poolBal, supply, mp, mg, mr, info, gtas, nextToken, placed, sb, maxSupply] = await Promise.all([
+  const [registryBal, marketBal, bankBal, poolBal, supply, mp, mg, mr, cur, gtas, nextToken, sb, maxSupply, ...eds] = await Promise.all([
     at("usdt", "balanceOf", [addr.registry]), at("usdt", "balanceOf", [addr.market]), at("usdt", "balanceOf", [addr.bank]),
     at("usdt", "balanceOf", [addr.challenge]),
     at("tree", "totalSupply"), at("tree", "mintedToPatrons"), at("tree", "mintedToGuardians"), at("tree", "mintedToReferrers"),
-    at("tree", "editionInfo"), at("governance", "getGTAs"), at("token", "nextTokenId"),
-    at("tree", "placedLandYears"), at("tree", "supplyBreakdown"), at("tree", "MAX_SUPPLY"),
+    at("editions", "currentEdition"), at("governance", "getGTAs"), at("token", "nextTokenId"),
+    at("tree", "supplyBreakdown"), at("tree", "MAX_SUPPLY"),
+    ...Array.from({ length: 21 }, (_, i) => at("editions", "editionOf", [i + 1])),
   ]);
+  // V12.1: the land-years reserved across the editions (sold or not), and the open edition's room for new requests
+  const placed: bigint = eds.reduce((x: bigint, e: any) => x + BigInt(e.reserved), 0n);
+  const open = Number(cur) <= 21 ? eds[Number(cur) - 1] : null;
   const burned: bigint = sb.burned;
   const held = await Promise.all([...ledger.heldFor].map((h) => at("bank", "heldForSuccessor", [h])));
   const bad: string[] = [];
@@ -251,8 +255,8 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
     if (p.token) tokens++;
   }
   const rows = parts.map((p) => p.row);
-  // the unallocated remainder matches the capacity left to within rounding dust, kept (addendum, point 6)
-  const unplaced: bigint = await at("tree", "unplacedCapacity");
+  // the unallocated remainder matches the space not yet sold to within rounding dust, kept (addendum, point 6)
+  const unplaced: bigint = await at("editions", "unallocatedTR3");
   const parts7 = sb.minted + sb.owed + sb.reserve + sb.committed + sb.unstreamed + sb.unallocated + sb.burned;
   const dust = sb.unallocated > unplaced ? sb.unallocated - unplaced : unplaced - sb.unallocated;
   const inv = [
@@ -270,9 +274,9 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
   for (const r of rows) tr3Accruing += r.accruing ?? 0n;
   for (const r of rows) if (standingSale(r)) { marketCap += r.price!; sold++; soldProjected += r.projected ?? 0n; }
   // editionInfo: (edition, F, land-years placed in it, its size, opened at, closes by)
-  const used: bigint = info[2], capacity: bigint = info[3];
+  const used: bigint = open ? BigInt(open.reserved) + BigInt(open.freed) : 0n, capacity: bigint = open ? BigInt(open.capacity) : 0n;
   return {
-    t, block, rows, edition: Number(info[0]), landYears: placed, tr3Supply: supply, gtas: gtas.length, capacity, burned,
+    t, block, rows, edition: Number(cur), landYears: placed, tr3Supply: supply, gtas: gtas.length, capacity, burned,
     registryBal, marketBal, bankBal, poolBal, registryHeld, marketHeld, bankHeld, poolHeld, reserve: sb.reserve, inv, counts, bad,
     marketCap, sold, soldProjected, tillNextEdition: capacity > used ? capacity - used : 0n, tr3Accruing, tr3Owed: sb.owed,
   };

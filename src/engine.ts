@@ -1,11 +1,11 @@
 // The ecosystem's actors. Each tick, everyone whose next move is due makes it, as a real transaction on the
 // local chain. Who the actors are, how often each thing happens and which governance the programme meets all
 // come from the run's scenario (config.ts). The rules they act under are V12's: the Covenant Flow Map v25.
-import { encodeAbiParameters, keccak256, maxUint256, zeroAddress, getAddress, type Address } from "viem";
+import { encodeAbiParameters, keccak256, maxUint256, zeroAddress, zeroHash, getAddress, type Address } from "viem";
 import { read, send, labelAddress, fund, addr, bulk, abis, type Key } from "./chain";
 import {
   DAY, YEAR, RequestStatus, Step, CovenantStatus, BlockReason, ChallengeState, Option, OptionName, Holds, Action,
-  Outcome, OutcomeName, Agreement, COMPLETED, Matter, register, nameOf, countryName,
+  Outcome, OutcomeName, Agreement, COMPLETED, Matter, register, nameOf, countryName, hectares,
 } from "./model";
 import type { Scenario, Behaviour, CountryConfig } from "./config";
 import { Control } from "./control";
@@ -21,7 +21,7 @@ export const LAST_EDITION = 21;
 // pre-mint fates
 const F = {
   NORMAL: 0, CANCEL: 1, CLAIM_LAPSE: 2, ABANDON: 3, CHALLENGE: 4, UNSOLD: 5, LAPSE_NOTHING: 6, LAPSE_UNATTESTED: 7,
-  REFUSE: 8,
+  REFUSE: 8, UNCLAIMED: 9, REJECT: 10,
 };
 
 export type Note = { t: number; rid: number; kind: string; text: string };
@@ -116,6 +116,7 @@ export class Engine {
   /** Relics waiting for their owner to use them. */
   relics: { id: bigint; owner: Address; edition: number }[] = [];
   relicPass = 0;
+  queuePass = 0;
 
   // the calendar
   nextArrival = 0;
@@ -388,11 +389,11 @@ export class Engine {
     this.now = t;
     this.volatile.clear();
     // an edition whose eight years are up is closed now, so its burn lands when it falls due, not at the next placement
-    const open = N(await read("tree", "editionOpen"));
-    if (open <= LAST_EDITION && N(await read("tree", "currentEdition")) !== open) await this.act(this.server, "tree", "closeEditionIfDue", [], "closeEdition");
+    const open = N(await read("editions", "current"));
+    if (open <= LAST_EDITION && N(await read("editions", "currentEdition")) !== open) await this.act(this.server, "editions", "closeEditionIfDue", [], "closeEdition");
     const mean = YEAR / Math.max(0.1, this.b.arrivalsPerYear);
     while (!this.arrivalsOver() && t >= this.nextArrival) {
-      if (this.b.fillLand && N(await read("tree", "currentEdition")) > LAST_EDITION) {
+      if (this.b.fillLand && N(await read("editions", "currentEdition")) > LAST_EDITION) {
         this.landFull = true;
         this.landFullAt = t;
         this.note("land-full", 0, `All ${LAST_EDITION} editions are closed: the programme's TR3 is committed or burned. No more landowners are admitted; the covenants already made run out their terms.`);
@@ -405,6 +406,10 @@ export class Engine {
     const due = this.requests.filter((rid) => !this.done.has(rid) && (this.nextAt.get(rid) ?? 0) <= t);
     await this.prefetch(due);
     for (const rid of due) await this.advance(rid);
+    if (t >= this.queuePass) {
+      await this.promoteQueue();
+      this.queuePass = t + DAY;
+    }
     this.preReq.clear();
     this.preTerm.clear();
     if (t >= this.nextChallengePass) {
@@ -417,7 +422,8 @@ export class Engine {
     }
     // the end of the programme: the last edition closed and every term ended, the Reserve is burned (OV1)
     if (this.requests.length > 0 && this.done.size === this.requests.length && !this.reserveFinalized
-      && N(await read("tree", "currentEdition")) > LAST_EDITION && N(await read("tree", "liveCovenants")) === 0) {
+      && N(await read("editions", "currentEdition")) > LAST_EDITION && N(await read("tree", "liveCovenants")) === 0
+      && N(await read("editions", "openReservations")) === 0) {
       const left = await read<bigint>("tree", "reserve");
       if (await this.act(this.server, "tree", "finalizeReserve", [], "finalizeReserve")) {
         this.reserveFinalized = true;
@@ -450,12 +456,16 @@ export class Engine {
       this.note("refused", 0, `A landowner in ${countryName(country)} is turned away: the country is suspended.`);
       return 0;
     }
-    if (N(await read("tree", "currentEdition")) > LAST_EDITION) {
+    const cur = N(await read("editions", "currentEdition"));
+    if (cur > LAST_EDITION) {
       this.note("refused", 0, `A landowner in ${countryName(country)} is turned away: all ${LAST_EDITION} editions are closed.`);
       return 0;
     }
-    const minLand = N(await read("tree", "minLandUnits"));
-    const maxLand = N(await read("tree", "maxLandUnits"));
+    const minLand = N(await read("editions", "minLandUnits"));
+    // the largest title any edition takes; plots that "grow with the editions" stay within the open edition's
+    const maxLand = this.b.landGrowsWithEditions
+      ? Math.floor(N(await read("editions", "limitOf", [cur])) / 3)
+      : N(await read("editions", "maxLandUnits"));
     let land: number;
     if (this.b.landGrowsWithEditions) land = minLand + Math.floor(((maxLand - minLand) * this.rand(1000) ** 2) / 1_000_000);
     else {
@@ -480,6 +490,11 @@ export class Engine {
       return 0;
     }
     const term = lo + this.rand(hi - lo + 1);
+    // the queue reserves it in the lowest edition with room for all of it whose limit it fits (V12.1, rule 1)
+    if (N(await read("editions", "wouldReserve", [BigInt(land), term])) === 0) {
+      this.note("refused", 0, `A landowner in ${countryName(country)} is turned away: no edition has room for ${hectares(land)} for ${term} years.`);
+      return 0;
+    }
     const [vf, af, jf, al] = await read<bigint[]>("countries", "quote", [country, BigInt(land)]);
     const fees = vf + af + jf + al;
     const g = await this.newGuardian(2n * fees + 1000n * 10n ** 18n);
@@ -503,6 +518,8 @@ export class Engine {
     let x = b.cancelPct;
     if (f < x) return F.CANCEL;
     if (f < (x += b.claimLapsePct)) return F.CLAIM_LAPSE;
+    if (f < (x += b.unclaimedPct)) return F.UNCLAIMED;
+    if (f < (x += b.rejectPct)) return F.REJECT;
     if (f < (x += b.abandonPct)) return F.ABANDON;
     if (f < (x += b.refusePct)) return F.REFUSE;
     if (f < (x += b.preMintChallengePct)) return F.CHALLENGE;
@@ -529,27 +546,6 @@ export class Engine {
       else await this.finishCancelled(rid, r.tokenId);
       return;
     }
-    // once all 21 editions have closed no land is placed: a request not yet minted cannot be, and its guardian
-    // withdraws it once nobody holds a live claim on it
-    const closed = (status === RequestStatus.OPEN || status === RequestStatus.CLAIMED) && N(await read("tree", "currentEdition")) > LAST_EDITION;
-    if (closed) {
-      const live = status === RequestStatus.CLAIMED && t <= N(r.claimedAt) + this.acceptance;
-      if (live) { this.nextAt.set(rid, N(r.claimedAt) + this.acceptance + 1); return; }
-      if (await this.act(r.guardian, "registry", "cancelRequest", [BigInt(rid)], "cancel-closed", rid)) {
-        this.note("refused", rid, `Request #${rid} can no longer be verified: all ${LAST_EDITION} editions are closed. Its guardian withdraws it and is refunded in full.`);
-      }
-      this.nextAt.set(rid, t + DAY);
-      return;
-    }
-    // not verified within two acceptance windows of the request: anyone ends it, and its edition room is freed (D17)
-    const expiresAt = N(r.requestedAt) + 2 * this.acceptance;
-    if ((status === RequestStatus.OPEN || status === RequestStatus.CLAIMED) && t > expiresAt) {
-      if (await this.act(this.server, "registry", "cancelRequest", [BigInt(rid)], "expire", rid)) {
-        this.note("expired", rid, `Request #${rid} was not verified within 60 days of its request: it expires, is refunded, and its place in the editions goes to the next land.`);
-      }
-      this.nextAt.set(rid, t + DAY);
-      return;
-    }
     if (status === RequestStatus.OPEN) {
       if (this.fate.get(rid) === F.CANCEL) {
         await this.act(r.guardian, "registry", "cancelRequest", [BigInt(rid)], "cancel", rid);
@@ -564,8 +560,21 @@ export class Engine {
         // bars the claim; nobody else may claim until it ends
         if (t + 3600 <= N(r.firstClaimUntil) && this.rand(10) < 7 && (await this.holderCan(await this.q<Address>("admin", "holderOf", [first])))) v = first;
         else { this.nextAt.set(rid, N(r.firstClaimUntil) + 1); return; }
-      } else v = await this.pickVerifier(N(r.country), r.barred, zeroAddress, r.guardian);
-      if (v === zeroAddress) { this.nextAt.set(rid, Math.min(t + 30 * DAY, expiresAt + 1)); return; }
+      } else if (this.fate.get(rid) !== F.UNCLAIMED) v = await this.pickVerifier(N(r.country), r.barred, zeroAddress, r.guardian);
+      if (v === zeroAddress) {
+        // no claim, no loss of place (V12.1, rule 3): after the acceptance window a Trust Admin of the country assigns
+        const openAt = Math.max(N(r.requestedAt) + this.acceptance, N(r.firstClaimUntil)) + 3600;
+        if (t < openAt) { this.nextAt.set(rid, openAt); return; }
+        const pick = await this.pickVerifier(N(r.country), r.barred, zeroAddress, r.guardian);
+        const holder = pick === zeroAddress ? zeroAddress : await this.anyHolder(N(r.country));
+        if (holder !== zeroAddress && (await this.act(holder, "parties", "assignVerifier", [BigInt(rid), pick], "assign", rid))) {
+          this.fate.set(rid, F.NORMAL);
+          this.note("assign", rid, `No verifier claimed request #${rid} within the acceptance window: ${nameOf(holder)} assigns it to ${nameOf(pick)}. Its place in the queue is kept.`);
+          this.submitAt.set(rid, t + Math.min(5 * DAY + this.rand(20) * DAY, Math.max(DAY, this.acceptance - DAY)));
+        }
+        this.nextAt.set(rid, this.submitAt.get(rid) ?? t + 7 * DAY);
+        return;
+      }
       if (await this.act(v, "registry", "claim", [BigInt(rid)], v === first ? "first claim" : "claim", rid)) {
         if (v === first) this.note("first-claim", rid, `${nameOf(v)}, whose challenge removed the verification, takes request #${rid} on its first claim.`);
         this.submitAt.set(rid, t + Math.min(5 * DAY + this.rand(20) * DAY, Math.max(DAY, this.acceptance - DAY)));
@@ -581,17 +590,34 @@ export class Engine {
         const v = await this.pickVerifier(N(r.country), r.barred, r.verifier, r.guardian);
         if (v !== zeroAddress && (await this.act(v, "registry", "claim", [BigInt(rid)], "reclaim", rid))) {
           this.note("claim-lapsed", rid, `${nameOf(r.verifier)} let the claim on request #${rid} lapse; ${nameOf(v)} takes it over.`);
-          // inside the claim's window and the request's 60 days
-          this.submitAt.set(rid, Math.min(t + Math.min(5 * DAY + this.rand(15) * DAY, Math.max(DAY, this.acceptance - DAY)), expiresAt - DAY));
+          this.submitAt.set(rid, t + Math.min(5 * DAY + this.rand(15) * DAY, Math.max(DAY, this.acceptance - DAY)));
         }
         const s = this.submitAt.get(rid) ?? 0;
         this.nextAt.set(rid, s > t ? s : t + 7 * DAY);
         return;
       }
       if (this.fate.get(rid) === F.CLAIM_LAPSE) { this.nextAt.set(rid, claimedAt + this.acceptance + DAY); return; }
+      if (this.fate.get(rid) === F.REJECT) {
+        // no land, or no valid title (V12.1, rule 4): a rejection is a verification with an EcoScore of 0
+        if (await this.act(r.verifier, "registry", "submitVerification", [BigInt(rid), 0, 0, 0, h("no title", rid), zeroHash, ""], "reject", rid)) {
+          this.note("reject", rid, `${nameOf(r.verifier)} rejects request #${rid}: no valid title for the land. It is open to a 1A challenge during the watchdog.`);
+        }
+        this.nextAt.set(rid, t + this.watchdog + DAY);
+        return;
+      }
       const score = 40 + this.rand(56);
       await this.act(r.verifier, "registry", "submitVerification",
         [BigInt(rid), score, 2 + this.rand(5), 1 + this.rand(3), h("title", rid), h("folios", rid), this.metadataOf(rid)], "submit", rid);
+      this.nextAt.set(rid, t + DAY);
+      return;
+    }
+    if (status === RequestStatus.VERIFIED && r.rejected) {
+      // the watchdog let the rejection stand: anyone ends it -- the verifier's fee paid, the rest refunded
+      const verifiedAt = N(r.verifiedAt);
+      if (t <= verifiedAt + this.watchdog || BigInt(r.challengeId) !== 0n) { this.nextAt.set(rid, Math.max(t + DAY, verifiedAt + this.watchdog + 1)); return; }
+      if (await this.act(this.server, "registry", "cancelRequest", [BigInt(rid)], "end-rejected", rid)) {
+        this.note("reject", rid, `The rejection of request #${rid} stands: its verifier is paid its fee, the landowner refunded the rest, and its place in the queue is released.`);
+      }
       this.nextAt.set(rid, t + DAY);
       return;
     }
@@ -665,7 +691,7 @@ export class Engine {
         }
         return;
       }
-      await this.act(r.verifier, "deeds", "anchorPower", [BigInt(rid), h("reg", rid), "RG/0001"], "anchorPower", rid);
+      await this.act(r.verifier, "deeds", "anchorPower", [BigInt(rid), h("reg", rid), `RG/${rid}`], "anchorPower", rid);
     } else if ((step === Step.DEED || step === Step.AGREEMENT) && preSale) {
       // the Holder pays the duty and the notary, and draws its costs from the allowance against the receipts
       if (holderCan) await this.drawCosts(rid, holder, 0.5 + this.rand(40) / 100, "duty and notary");
@@ -713,12 +739,7 @@ export class Engine {
       if (a === zeroAddress) { this.nextAt.set(rid, N(doc.recordedAt) + this.sc.contracts.gtaAttestFromDays * DAY + 1); return; }
       await this.act(a, "deeds", "attest", [BigInt(rid), doc.docHash, h("certified copy", rid, N(s.cursor)), `${this.shortOf(N(r.country))}-REG`], "attest", rid);
     } else if (step === Step.MINT) {
-      if (N(await read("tree", "currentEdition")) > LAST_EDITION) {
-        if (await this.act(r.guardian, "registry", "abandonRequest", [BigInt(rid)], "abandon-closed", rid)) {
-          this.note("stranded", rid, `Request #${rid} cannot be minted: all ${LAST_EDITION} editions are closed. The guardian abandons it, after paying the verifier and the attester.`);
-        }
-        return;
-      }
+      // a reservation outlives its edition's close (V12.1, rule 9): it is minted and sold as any other
       await this.act(r.guardian, "registry", "mint", [BigInt(rid), this.metadataOf(rid)], "mint", rid);
     } else if (step === Step.SALE) {
       await this.sale(rid, r, t);
@@ -1002,7 +1023,7 @@ export class Engine {
     if ((await read<bigint>("challenge", "poolBalance", [tid])) !== 0n) {
       if (!(await this.act(this.patrons[0], "challenge", "sweepReviewPool", [tid], "sweep", rid))) { this.nextAt.set(rid, t + 7 * DAY); return; }
     }
-    await this.claimTR3(rid, tid);
+    await this.claimTR3(rid, tid, true); // the End Date: the last owner takes its pool
     const [, , toEndDate] = await read<[number, bigint, boolean]>("tree", "relicSource", [tid]);
     if (toEndDate && (await read<bigint>("overcharge", "relicOf", [tid])) === 0n) {
       const id = await read<bigint>("overcharge", "nextRelicId");
@@ -1133,7 +1154,7 @@ export class Engine {
     const ctx = await read("registry", "stepContext", [BigInt(rid)]);
     if (!ctx.flowHasPower || !holderCan) return;
     const c = await read("core", "getCovenant", [tid]);
-    await this.act(holder, "deeds", "recordReplacementPower", [tid, h("power", tid, this.now), h("reg", tid, this.now), "RG/R", BigInt(N(c.termEnd) + YEAR)], "replacementPower", rid);
+    await this.act(holder, "deeds", "recordReplacementPower", [tid, h("power", tid, this.now), h("reg", tid, this.now), `RG/R/${tid}/${this.now}`, BigInt(N(c.termEnd) + YEAR)], "replacementPower", rid);
   }
 
   async yearly(rid: number, tid: bigint, c: any, st: any) {
@@ -1152,7 +1173,7 @@ export class Engine {
           if (await this.act(owner, "token", "list", [tid, price], "resale-list", rid)) {
             await this.act(buyer, "token", "buy", [tid, price], "resale-buy", rid);
           }
-        } else if (await this.act(buyer, "token", "makeOffer", [tid, price], "resale-offer", rid)) {
+        } else if (await this.act(buyer, "token", "makeOffer", [tid, price, BigInt(this.now + 7 * DAY)], "resale-offer", rid)) {
           await this.act(owner, "token", "acceptOffer", [tid, buyer, price], "resale-accept", rid);
         }
       }
@@ -1183,10 +1204,17 @@ export class Engine {
     }
   }
 
-  async claimTR3(rid: number, tid: bigint) {
+  /**
+   * The two claims (R, 14 Oct): anyone triggers the landowner's; only the EFT's owner makes the patron claim, and
+   * not every year -- an owner may leave its pool to grow, and a sale passes it to the buyer. `final`: the term has
+   * ended, and the last owner takes what is left.
+   */
+  async claimTR3(rid: number, tid: bigint, final = false) {
     const v = await read("tree", "rewardOf", [tid]);
-    if (v.patronClaimable + v.guardianClaimable + v.referralClaimable === 0n) return;
-    await this.act(this.patrons[0], "tree", "claim", [tid], "claimTR3", rid);
+    if (v.guardianClaimable + v.referralClaimable !== 0n) await this.act(this.patrons[0], "tree", "claimGuardian", [tid], "claimTR3", rid);
+    if (v.patronClaimable === 0n || !(final || this.chance(this.b.patronClaimPct))) return;
+    const owner = getAddress(await read<Address>("token", "ownerOf", [tid]));
+    await this.act(owner, "tree", "claimPatron", [tid], "claimPool", rid);
   }
 
   async finishCancelled(rid: number, tid: bigint) {
@@ -1201,7 +1229,7 @@ export class Engine {
             return;
           }
         }
-        await this.claimTR3(rid, tid);
+        await this.claimTR3(rid, tid, true);
       }
     }
     this.done.add(rid);
@@ -1443,6 +1471,57 @@ export class Engine {
   // =====================================================================================
   // Choosing people
   // =====================================================================================
+
+  /** An active, unfrozen Trust Admin of the country, or zero. */
+  async anyHolder(country: number): Promise<Address> {
+    const hs = this.countryHolders.get(country) ?? [];
+    const ok = await Promise.all(hs.map((h) => this.holderCan(h)));
+    return hs.find((_, i) => ok[i]) ?? zeroAddress;
+  }
+
+  /**
+   * The request queue's housekeeping, as the portal does it (V12.1, rule 6): space a release freed in an edition goes
+   * to the earliest waiting request in a higher edition that fits it (promote, which the contract checks), and the
+   * space that leaves frees in turn; once nobody waiting fits, the edition's freed space is settled and opens to new
+   * requests. Anyone may call either; the server does.
+   */
+  async promoteQueue(): Promise<void> {
+    const cur = N(await read("editions", "currentEdition"));
+    if (cur > LAST_EDITION) return;
+    const eds = await Promise.all(Array.from({ length: LAST_EDITION }, (_, i) => read("editions", "editionOf", [i + 1])));
+    if (!eds.some((e: any) => !e.closed && BigInt(e.freed) > 0n)) return;
+    // the waiting requests, by edition, in queue order (the lists carry stale entries: skip them)
+    const waiting = new Map<number, { id: bigint; ly: bigint }[]>();
+    for (let k = cur; k <= LAST_EDITION; k++) {
+      const ids = await read<readonly bigint[]>("editions", "waitingIn", [k]);
+      const live: { id: bigint; ly: bigint }[] = [];
+      for (const id of new Set(ids)) {
+        const r = await read("editions", "reservationOf", [id]);
+        if (N(r.edition) === k && !r.fixed_ && !r.sold && !r.released) live.push({ id, ly: BigInt(r.landYears) });
+      }
+      waiting.set(k, live);
+    }
+    for (let e = cur; e <= LAST_EDITION; e++) {
+      for (let guard = 0; guard < 500; guard++) {
+        const E = await read("editions", "editionOf", [e]);
+        if (E.closed || BigInt(E.freed) === 0n) break;
+        const limit = BigInt(await read("editions", "limitOf", [e]));
+        const room = BigInt(E.capacity) - BigInt(E.reserved);
+        let best: { id: bigint; ly: bigint; k: number } | null = null;
+        for (let k = e + 1; k <= LAST_EDITION; k++) {
+          for (const w of waiting.get(k) ?? []) if (w.ly <= limit && w.ly <= room && (!best || w.id < best.id)) best = { ...w, k };
+        }
+        if (!best) {
+          await this.act(this.server, "editions", "settle", [e], "settle");
+          break;
+        }
+        if (!(await this.act(this.server, "editions", "promote", [best.id, e], "promote", N(best.id)))) break;
+        this.note("queue", N(best.id), `Space freed in edition ${e} goes to the earliest waiting request that fits it: #${best.id} moves down from edition ${best.k}.`);
+        waiting.set(best.k, (waiting.get(best.k) ?? []).filter((w) => w.id !== best!.id));
+        (waiting.get(e) ?? waiting.set(e, []).get(e)!).push({ id: best.id, ly: best.ly });
+      }
+    }
+  }
 
   async pickVerifier(country: number, barred: Address, lapsed: Address, guardian: Address): Promise<Address> {
     const vs = this.countryVerifiers.get(country) ?? [];

@@ -19,12 +19,12 @@ const CONTRACTS = [
   ["admin", "EcoFuturesAdmin"], ["countries", "EcoCountries"], ["registry", "EcoRegistry"], ["deeds", "EcoDeeds"],
   ["core", "EcoFuturesCore"], ["bank", "EcoBank"], ["challenge", "EcoChallenge"], ["governance", "EcoFuturesGovernance"],
   ["tree", "Tree"], ["token", "EcoFuturesToken"], ["market", "EcoMarket"], ["parties", "EcoParties"],
-  ["overcharge", "EcoOvercharge"], ["lens", "EcoLens"],
+  ["overcharge", "EcoOvercharge"], ["editions", "EcoEditions"], ["lens", "EcoLens"],
 ];
 const KEY_OF_INTERFACE = {
   IEcoAdmin: "admin", IEcoCountries: "countries", IEcoRegistry: "registry", IEcoDeeds: "deeds", IEcoCore: "core",
   IEcoBank: "bank", IEcoChallenge: "challenge", IEcoGovernance: "governance", ITree: "tree", IEcoTree: "tree",
-  IEcoToken: "token", IEcoMarket: "market", IEcoParties: "parties", IEcoOvercharge: "overcharge", IEcoLens: "lens",
+  IEcoToken: "token", IEcoMarket: "market", IEcoParties: "parties", IEcoOvercharge: "overcharge", IEcoEditions: "editions", IEcoLens: "lens",
 };
 // Plumbing every contract has: hidden unless asked for.
 const PLUMBING = new Set(["initialize", "sync", "directory", "pause", "unpause", "paused", "upgradeTo", "upgradeToAndCall",

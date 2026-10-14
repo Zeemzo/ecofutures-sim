@@ -26,16 +26,16 @@ export const roleOf = (who: Address): string => {
 /** What each role does in a run: the calls the simulated actors make in it, for acting freely as one. */
 export const ROLE_CALLS: Record<string, [Key, string][]> = {
   guardian: [["registry", "requestVerification"], ["registry", "cancelRequest"], ["registry", "abandonRequest"], ["registry", "mint"],
-    ["bank", "listForAuction"], ["core", "proposePayee"], ["core", "acceptPayee"], ["token", "list"], ["token", "acceptOffer"], ["tree", "claim"]],
+    ["bank", "listForAuction"], ["core", "proposePayee"], ["core", "acceptPayee"], ["token", "list"], ["token", "acceptOffer"], ["tree", "claimGuardian"]],
   verifier: [["registry", "claim"], ["registry", "submitVerification"], ["deeds", "anchorPower"], ["deeds", "recordDocument"], ["deeds", "attest"],
     ["core", "verify"], ["core", "blockCovenant"], ["core", "acceptSeat"], ["challenge", "attestVerification"], ["challenge", "raise"],
     ["challenge", "respond"], ["challenge", "vote"], ["challenge", "withdraw"]],
   patron: [["usdt", "mint"], ["usdt", "approve"], ["market", "bid"], ["market", "settleAuction"], ["market", "confirmSale"], ["token", "list"], ["token", "buy"], ["token", "makeOffer"],
-    ["token", "acceptOffer"], ["tree", "claim"], ["overcharge", "mintRelic"], ["overcharge", "overcharge"], ["overcharge", "transmute"]],
-  "Trust Admin": [["admin", "addVerifier"], ["deeds", "grantPower"], ["deeds", "recordDocument"], ["core", "nominateVerifier"], ["registry", "lapseSale"],
+    ["token", "acceptOffer"], ["tree", "claimPatron"], ["tree", "claimGuardian"], ["overcharge", "mintRelic"], ["overcharge", "overcharge"], ["overcharge", "transmute"]],
+  "Trust Admin": [["admin", "addVerifier"], ["parties", "assignVerifier"], ["deeds", "grantPower"], ["deeds", "recordDocument"], ["core", "nominateVerifier"], ["registry", "lapseSale"],
     ["countries", "proposeSettings"], ["challenge", "vote"]],
   GTA: [["governance", "propose"], ["governance", "approve"], ["governance", "execute"], ["deeds", "attest"], ["challenge", "vote"]],
-  server: [["admin", "setKyc"], ["governance", "emergencyFreeze"], ["tree", "closeEditionIfDue"]],
+  server: [["admin", "setKyc"], ["governance", "emergencyFreeze"], ["editions", "closeEditionIfDue"], ["editions", "promote"], ["editions", "settle"]],
   foundation: [["governance", "proposeFeeSplit"], ["governance", "executeFeeSplit"], ["governance", "endExpiredFreeze"], ["bank", "releaseHeldHolderFees"]],
 };
 
