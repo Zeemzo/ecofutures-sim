@@ -723,11 +723,12 @@ async function renderDrawer(rid: number, force: boolean) {
   const row = S.census?.rows.find((r) => r.rid === rid);
   if (!row) return;
   const L = S.ledger;
-  let reward: any = null, w: any = null, ch: any = null;
+  let reward: any = null, w: any = null, ch: any = null, mk: any = null;
   // the edition its land took at sign-up (D17); Core records it at activation
   const placed = row.edition ? 0 : Number((await read<any>("editions", "reservationOf", [BigInt(rid)]).catch(() => ({ edition: 0 }))).edition);
   if (row.tokenId) {
-    [reward, w] = await Promise.all([read("tree", "rewardOf", [row.tokenId]), read("challenge", "getWindow", [row.tokenId])]);
+    [reward, w, mk] = await Promise.all([read("tree", "rewardOf", [row.tokenId]), read("challenge", "getWindow", [row.tokenId]),
+      read("lens", "market", [row.tokenId]).catch(() => null)]);
     const open = row.challenged ? await read<bigint>("challenge", "openChallengeOf", [row.tokenId]) : 0n;
     if (open !== 0n) ch = await read("challenge", "getChallenge", [open]);
   }
@@ -753,6 +754,19 @@ async function renderDrawer(rid: number, force: boolean) {
     const pct = Math.round(((row.released ?? 0) / row.total) * 100);
     progress = `<div class="progress"><h3>Instalments</h3><div class="track"><i style="width:${pct}%"></i></div><span class="small muted">${row.released} of ${row.total} released · verified through interval ${row.verifiedThrough} · ${money(row.balance ?? 0n)} USDT still held · review pool ${money(row.pool ?? 0n)} USDT${row.frozen ? " · <b>instalments held</b>" : ""}${row.halted ? " · <b>releases halted</b>" : ""}</span></div>`;
   }
+  // the EFT's market (R, 14 Oct): its pool passes to a buyer, and any change to what it carries voids every order
+  let market = "";
+  if (mk && row.termStart) {
+    const offers = (mk.offers as any[]).map((o) => `${esc(nameOf(o.buyer))} ${money(o.price)} USDT, until ${dateOf(Number(o.expiry))}`);
+    market = `<section class="market"><h3>Market</h3><dl class="facts">
+      ${fact("Pool, waiting for the owner", `${money(mk.pool)} TR3${mk.pool > 0n ? " (a sale passes it to the buyer)" : ""}`)}
+      ${fact("Listed", mk.listPrice > 0n ? `${money(mk.listPrice)} USDT, buy now` : "no")}
+      ${fact("Open offers", offers.length ? offers.join("<br>") : "none")}
+      ${fact("Last resale", mk.lastSalePrice > 0n ? `${money(mk.lastSalePrice)} USDT` : "none yet")}
+      ${fact("Order counter", `${mk.orderCounter}: orders made at an earlier value are void`)}
+      ${fact("Allocation left", `${money(mk.allocationLeft)} TR3`)}
+    </dl></section>`;
+  }
   let windowInfo = "";
   if (w && Number(w.openedAt) !== 0) {
     const attested = !/^0x0+$/.test(w.attestor) ? `, attested by ${esc(nameOf(w.attestor))}` : ", not attested";
@@ -768,13 +782,17 @@ async function renderDrawer(rid: number, force: boolean) {
     ${canChallenge ? "" : `<span class="small muted">${row.tokenId ? "A challenge needs an open review window: one opens with each re-verification." : "A challenge is possible in the watchdog window after the verification."}</span>`}
     <div class="row"><button type="button" id="dBlock" ${isTerm || row.stage === "for-sale" ? "" : "disabled"}>The verifier blocks it</button>
     <button type="button" id="dFreeze" ${isTerm ? "" : "disabled"}>${row.frozen ? "Council releases the instalments" : "Council holds the instalments"}</button></div>
+    <div class="row"><button type="button" id="dOffer" ${mk && row.stage === "active" ? "" : "disabled"}>A patron makes an offer</button>
+    <button type="button" id="dClaimPool" ${mk && mk.pool > 0n ? "" : "disabled"}>The owner claims its pool</button></div>
     <div class="row"><button type="button" id="dTake" ${S.engine.control.requests.has(rid) ? "disabled" : ""}>${S.engine.control.requests.has(rid) ? "You control this request" : "Take over this request"}</button></div></div>`;
   const hist = S.entries.filter((e) => e.rid === rid).slice(-200).reverse();
-  $("dBody").innerHTML = `<dl class="facts">${facts.join("")}</dl>${progress}${windowInfo}${acts}
+  $("dBody").innerHTML = `<dl class="facts">${facts.join("")}</dl>${progress}${market}${windowInfo}${acts}
     <section><h3>History</h3><ol class="history">${hist.map((e) => `<li><time>${dateOf(e.t)}</time><span>${esc(e.text)}</span></li>`).join("") || "<li>Nothing yet.</li>"}</ol></section>`;
   $("dChallenge").onclick = () => enqueue(() => S.engine.userChallenge(rid, Number(($("dOutcome") as HTMLSelectElement).value)));
   $("dBlock").onclick = () => enqueue(() => S.engine.userBlock(rid));
   $("dFreeze").onclick = () => enqueue(() => S.engine.userFreezeDrip(rid, !row.frozen));
+  $("dOffer").onclick = () => enqueue(() => S.engine.userOffer(rid));
+  $("dClaimPool").onclick = () => enqueue(() => S.engine.userClaimPool(rid));
   $("dTake").onclick = () => { S.takeover?.takeRequest(rid); toast(`You control #${rid}: its steps wait for you in Take over.`); void renderDrawer(rid, true); };
 }
 

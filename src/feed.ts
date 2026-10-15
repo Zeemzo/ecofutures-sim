@@ -141,17 +141,18 @@ const FORMATS: Record<string, Fmt> = {
     `${countryName(n(a.country))}'s settings change: terms ${n(a.settings.minTermYears)} to ${n(a.settings.maxTermYears)} years, for new requests.`],
 
   // ---- editions, the Reserve and Relics ----
-  "editions.Reserved": (a, r) => ["term", `${r} takes the next place in the queue: ${ha(a.landYears)} ha-yr reserved in edition ${n(a.edition)}, the lowest with room whose limit it fits.`],
-  "editions.Moved": (a, r) => ["term", `Space freed in edition ${n(a.to)} goes to the earliest waiting request that fits: ${r} moves down from edition ${n(a.from)}.`],
-  "editions.FreedSettled": (a) => ["term", `No waiting request fits the ${ha(a.landYears)} ha-yr freed in edition ${n(a.edition)}: it opens to new requests.`, true],
+  "editions.Reserved": (a, r) => ["term", `${r} takes its place at sign-up: ${ha(a.landYears)} ha-yr in edition ${n(a.edition)}, the open one.`],
+  "editions.Moved": (a, r) => ["term", `Room free in edition ${n(a.to)} goes to the earliest waiting request that fits: ${r} moves down from edition ${n(a.from)}.`],
+  "editions.EditionSettling": (a) => ["alert", `Edition ${n(a.edition)} is settling: it takes no more sign-ups, and its free room goes to waiting requests from the editions above.`],
   "editions.Fixed": (a, r) => ["term", `${r}'s auction ended with a winner: its edition, ${n(a.edition)}, is fixed.`, true],
   "editions.Unfixed": (a, r) => ["term", `${r}'s sale was called off: its edition is unfixed, and its place in the queue kept.`],
   "editions.Sold": (a, r) => ["term", `${r} is sold in edition ${n(a.edition)}: ${tree(a.allocation)} over its term at an EcoScore of 100${a.capBurned > 0n ? `, the ${tree(a.capBurned)} above the per-land cap burned` : ""}.`, true],
   "editions.Released": (a, r) => ["money", a.burned > 0n ? `${r} never became a covenant: its edition had closed, so the ${tree(a.burned)} its space held are burned.`
-    : `${r} never became a covenant: its ${ha(a.landYears)} ha-yr in edition ${n(a.edition)} are freed for the queue.`, true],
+    : `${r} never became a covenant: its ${ha(a.landYears)} ha-yr in edition ${n(a.edition)} return to that edition.`, true],
+  "parties.RequestRejected": (a, r) => ["lifecycle", `${nameOf(a.verifier)} rejects ${r}: ${["", "the land is not found", "it has no valid title", "no access was given"][n(a.reason)] ?? "a rejection"}. A 1A challenge may overturn it in the watchdog.`],
   "editions.EditionOpened": (a) => ["alert", `Edition ${n(a.edition)} opens: its eight-year clock starts.`],
   "editions.EditionClosed": (a) => ["alert", a.byClock
-    ? `Edition ${n(a.edition)}'s eight years are up: the ${tree(a.burned)} no request reserved are burned; its ${ha(BigInt(a.reserved) - BigInt(a.sold))} ha-yr still reserved can still sell.`
+    ? `Edition ${n(a.edition)}'s eight years are up: the ${tree(a.burned)} of room no request took are burned; its ${ha(BigInt(a.placed) - BigInt(a.sold))} ha-yr placed and not yet sold can still sell.`
     : `Edition ${n(a.edition)} is sold out and closes.`],
   "tree.StreamReleased": (a, r) => ["money", `${r} releases ${tree(a.amount)} at an EcoScore of ${n(a.score)}.`, true],
   "tree.ReserveCredited": (a, r) => ["money", `${tree(a.amount)} of ${r}'s allocation goes to the Overcharge Reserve (${["the score's shortfall", "days blocked", "a breach", "an early end", "an unpaid boost"][n(a.source)]}).`, true],

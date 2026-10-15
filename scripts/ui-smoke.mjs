@@ -67,7 +67,12 @@ async function attempt(label, prepare, port, phone = false) {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e.message ?? e)));
   const consoleErrors = [];
-  page.on("console", (m) => { if (m.type() === "error") consoleErrors.push(m.text()); });
+  // an Error logged by the app shows as "JSHandle@error": read its message and the first lines of its stack
+  page.on("console", async (m) => {
+    if (m.type() !== "error") return;
+    const parts = await Promise.all(m.args().map((h) => h.evaluate((x) => (x instanceof Error ? `${x.message} @ ${(x.stack ?? "").split("\n").slice(1, 3).join(" ")}` : String(x))).catch(() => "?")));
+    consoleErrors.push(`${parts.join(" ") || m.text()} (${m.location()?.url ?? "?"})`);
+  });
   const t0 = Date.now();
   let result;
   try {
@@ -106,6 +111,14 @@ async function attempt(label, prepare, port, phone = false) {
       const over = /programme is over/i.test(await text("clockSub"));
       const played = Date.parse(d1) > Date.parse(d0), travelled = over || Date.parse(d2) - Date.parse(d1) > 360 * 86400_000;
       const quiet = /^0 /.test(anoms.trim());
+      // an active covenant's drawer shows its market (R, 14 Oct): the pool, the listing and the offers
+      let drawer = "no active covenant";
+      if (await page.$(".tile.s-active")) {
+        await page.click(".tile.s-active");
+        drawer = await page.waitForSelector("#dBody .market", { timeout: 15_000 }).then(() => "ok", () => "BROKEN (no Market section)");
+        await page.keyboard.press("Escape");
+        await page.evaluate(() => { const s = document.getElementById("scrim"); if (s && !s.hidden) s.click(); });
+      }
       // the Contracts tab: every contract drawn, and one's details open (V12's new contracts once broke it)
       await page.click('[data-view="explorer"]');
       await page.waitForSelector(".node", { timeout: 15_000 }).catch(() => {});
@@ -116,14 +129,18 @@ async function attempt(label, prepare, port, phone = false) {
       const covered = await page.evaluate(() => { const s = document.querySelector(".ex-side"); return !!s && getComputedStyle(s).position === "sticky" && window.innerWidth <= 1000; });
       const contracts = nodes === 15 && /Market/i.test(shown) && !wide && !covered;
       await page.click('[data-view="sim"]');
-      result = { ok: played && travelled && quiet && contracts, note: `played ${day(d0)} → ${day(d1)}, +1 yr → ${day(d2)}${over ? " (the programme is over)" : ""}; ${acts} transactions, ${anoms}; Contracts tab ${contracts ? "ok" : `BROKEN (${nodes} contracts drawn, showing "${shown}")`}` };
+      result = { ok: played && travelled && quiet && contracts && !/BROKEN/.test(drawer), note: `played ${day(d0)} → ${day(d1)}, +1 yr → ${day(d2)}${over ? " (the programme is over)" : ""}; ${acts} transactions, ${anoms}; drawer ${drawer}; Contracts tab ${contracts ? "ok" : `BROKEN (${nodes} contracts drawn, showing "${shown}")`}` };
       void year;
     }
   } catch (e) {
     result = { ok: false, note: String(e.message ?? e) };
   }
   if (errors.length && result.ok) result = { ok: false, note: `page error: ${errors[0]}` };
-  if (consoleErrors.length) result.note += ` [${consoleErrors.length} console errors, first: ${consoleErrors[0].slice(0, 160)}]`;
+  // an Error the app itself logged (a caught failure in its own code, as the feed's once was) fails the run; a resource
+  // that did not load (a dropped connection to the local chain under load) is only noted
+  const appErrors = consoleErrors.filter((x) => !/^Failed to load resource/.test(x));
+  if (appErrors.length && result.ok) result.ok = false;
+  if (consoleErrors.length) result.note += ` [${consoleErrors.length} console errors, first: ${consoleErrors[0].slice(0, 400)}]`;
   console.log(`${label.padEnd(34)} ${result.ok ? "ok  " : "FAIL"}  ${Math.round((Date.now() - t0) / 1000)}s  ${result.note}`);
   await ctx.close().catch(() => {});
   node.kill();

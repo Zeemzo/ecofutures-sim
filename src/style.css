@@ -440,3 +440,4 @@ ol.moves { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max
   .setup-foot .row { display: flex; flex-wrap: wrap; gap: 8px; }
   .setup-foot .row button, .setup-foot .row .file { flex: 1 1 auto; }
 }
+.market { display: grid; gap: 8px; }

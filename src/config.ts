@@ -304,7 +304,7 @@ export const SCENARIOS: Scenario[] = [
     { arrivalYears: 8, onTimePct: 40, littleLatePct: 30, attestPct: 25, challengePct: 5 }),
   make("pathb", "Path B lapses", "Brazil only: sales held in escrow until the recording is attested, with many recordings missing or unattested.",
     { arrivalYears: 6, pathBLapseNothingPct: 30, pathBLapseUnattestedPct: 30 }, onlyCountry(76)),
-  make("edition-race", "Edition race", "Editions 1/5,000 of production's size and many landowners: editions fill within months, and one land often runs across two or more of them. Plots grow with the editions, up to the largest each allows, so that 21 editions can fill: real plots are far smaller (see the Countries tab). Many covenants reach the 1,000,000 TR3 cap: what they cannot mint is burned.",
+  make("edition-race", "Edition race", "Editions 1/5,000 of production's size and many landowners: editions fill within months: a land that does not fit the room left goes to the next edition, which opens, and the room left goes to waiting requests that fit it. Plots grow with the editions, up to the largest each allows, so that 21 editions can fill: real plots are far smaller (see the Countries tab). Many covenants reach the 1,000,000 TR3 cap: what they cannot mint is burned.",
     { fillLand: true, landGrowsWithEditions: true, arrivalsPerYear: 80 }, COUNTRIES_V12, { editionScale: 20 }),
   make("breaches", "Breaches and cancellations", "One verification in ten finds a breach; half the blocks before a sale end in cancellation, and term challenges mostly allege the landowner's breach (3D).",
     { arrivalYears: 6, blockPermille: 100, cancelOfBlockPct: 50, termOutcomes: [30, 60, 5, 5], termOptions: [5, 15, 10, 70] }),

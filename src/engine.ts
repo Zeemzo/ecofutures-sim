@@ -1,7 +1,7 @@
 // The ecosystem's actors. Each tick, everyone whose next move is due makes it, as a real transaction on the
 // local chain. Who the actors are, how often each thing happens and which governance the programme meets all
 // come from the run's scenario (config.ts). The rules they act under are V12's: the Covenant Flow Map v25.
-import { encodeAbiParameters, keccak256, maxUint256, zeroAddress, zeroHash, getAddress, type Address } from "viem";
+import { encodeAbiParameters, keccak256, maxUint256, zeroAddress, getAddress, type Address } from "viem";
 import { read, send, labelAddress, fund, addr, bulk, abis, type Key } from "./chain";
 import {
   DAY, YEAR, RequestStatus, Step, CovenantStatus, BlockReason, ChallengeState, Option, OptionName, Holds, Action,
@@ -117,6 +117,10 @@ export class Engine {
   relics: { id: bigint; owner: Address; edition: number }[] = [];
   relicPass = 0;
   queuePass = 0;
+  /** An unclaimed request's assigner (R, 13 Oct, section 4): a Holder from day 30, or the Council from day 60. */
+  assignBy = new Map<number, "holder" | "council">();
+  /** Each place's land-years: fixed at its sign-up, so read once. */
+  lyOf = new Map<bigint, bigint>();
 
   // the calendar
   nextArrival = 0;
@@ -462,9 +466,14 @@ export class Engine {
       return 0;
     }
     const minLand = N(await read("editions", "minLandUnits"));
-    // the largest title any edition takes; plots that "grow with the editions" stay within the open edition's
+    // the largest title any edition takes; plots that "grow with the editions" stay within the open edition's limit
+    // and, at the small edition scales those runs use, within an eighth of its room: about the per-land cap's share
+    // (1,000,000 of an edition's 10,000,000 TR3). A land larger than an edition's capacity would pass through empty
+    // editions, each settling and starting its clock -- which production's sizes never allow (capacity 100,000 x F^2
+    // is never below the limit 10,000 x F)
+    const capNow = this.b.landGrowsWithEditions ? Math.max(1, Math.floor(N(await read("editions", "capacityOf", [cur])) / 8)) : 0;
     const maxLand = this.b.landGrowsWithEditions
-      ? Math.floor(N(await read("editions", "limitOf", [cur])) / 3)
+      ? Math.max(1, Math.floor(Math.min(N(await read("editions", "limitOf", [cur])), capNow) / 3))
       : N(await read("editions", "maxLandUnits"));
     let land: number;
     if (this.b.landGrowsWithEditions) land = minLand + Math.floor(((maxLand - minLand) * this.rand(1000) ** 2) / 1_000_000);
@@ -489,10 +498,11 @@ export class Engine {
       this.note("refused", 0, `A landowner in ${countryName(country)} is turned away: no term the country allows fits land the edition allows.`);
       return 0;
     }
-    const term = lo + this.rand(hi - lo + 1);
-    // the queue reserves it in the lowest edition with room for all of it whose limit it fits (V12.1, rule 1)
+    let term = lo + this.rand(hi - lo + 1);
+    if (capNow && land * term > capNow) term = Math.max(lo, Math.floor(capNow / land));
+    // its place is in the OPEN edition, within that edition's limit (R, 13 Oct, section 3)
     if (N(await read("editions", "wouldReserve", [BigInt(land), term])) === 0) {
-      this.note("refused", 0, `A landowner in ${countryName(country)} is turned away: no edition has room for ${hectares(land)} for ${term} years.`);
+      this.note("refused", 0, `A landowner in ${countryName(country)} is turned away: ${hectares(land)} for ${term} years is over the open edition's limit.`);
       return 0;
     }
     const [vf, af, jf, al] = await read<bigint[]>("countries", "quote", [country, BigInt(land)]);
@@ -562,14 +572,23 @@ export class Engine {
         else { this.nextAt.set(rid, N(r.firstClaimUntil) + 1); return; }
       } else if (this.fate.get(rid) !== F.UNCLAIMED) v = await this.pickVerifier(N(r.country), r.barred, zeroAddress, r.guardian);
       if (v === zeroAddress) {
-        // no claim, no loss of place (V12.1, rule 3): after the acceptance window a Trust Admin of the country assigns
-        const openAt = Math.max(N(r.requestedAt) + this.acceptance, N(r.firstClaimUntil)) + 3600;
+        // no claim, no loss of place (R, 13 Oct, section 4): from day 30 a Holder of the country assigns one of its own
+        // verifiers; about half wait until day 60, when the Council assigns by REASSIGN_VERIFIER
+        if (!this.assignBy.has(rid)) this.assignBy.set(rid, this.rand(2) === 0 ? "council" : "holder");
+        const council = this.assignBy.get(rid) === "council";
+        const openAt = Math.max(N(r.requestedAt) + (council ? 2 : 1) * this.acceptance, N(r.firstClaimUntil)) + 3600;
         if (t < openAt) { this.nextAt.set(rid, openAt); return; }
         const pick = await this.pickVerifier(N(r.country), r.barred, zeroAddress, r.guardian);
-        const holder = pick === zeroAddress ? zeroAddress : await this.anyHolder(N(r.country));
-        if (holder !== zeroAddress && (await this.act(holder, "parties", "assignVerifier", [BigInt(rid), pick], "assign", rid))) {
+        let by = "";
+        if (pick !== zeroAddress && council) {
+          if (await this.vote(Action.REASSIGN_VERIFIER, ["uint256", "address"], [BigInt(rid), pick], "council assign", rid)) by = "the Council";
+        } else if (pick !== zeroAddress) {
+          const holder = getAddress(await this.q<Address>("admin", "holderOf", [pick]));
+          if ((await this.holderCan(holder)) && (await this.act(holder, "parties", "assignVerifier", [BigInt(rid), pick], "assign", rid))) by = nameOf(holder);
+        }
+        if (by) {
           this.fate.set(rid, F.NORMAL);
-          this.note("assign", rid, `No verifier claimed request #${rid} within the acceptance window: ${nameOf(holder)} assigns it to ${nameOf(pick)}. Its place in the queue is kept.`);
+          this.note("assign", rid, `No verifier claimed request #${rid} in ${council ? "60" : "30"} days: ${by} assigns it to ${nameOf(pick)}. Its place is kept.`);
           this.submitAt.set(rid, t + Math.min(5 * DAY + this.rand(20) * DAY, Math.max(DAY, this.acceptance - DAY)));
         }
         this.nextAt.set(rid, this.submitAt.get(rid) ?? t + 7 * DAY);
@@ -598,9 +617,11 @@ export class Engine {
       }
       if (this.fate.get(rid) === F.CLAIM_LAPSE) { this.nextAt.set(rid, claimedAt + this.acceptance + DAY); return; }
       if (this.fate.get(rid) === F.REJECT) {
-        // no land, or no valid title (V12.1, rule 4): a rejection is a verification with an EcoScore of 0
-        if (await this.act(r.verifier, "registry", "submitVerification", [BigInt(rid), 0, 0, 0, h("no title", rid), zeroHash, ""], "reject", rid)) {
-          this.note("reject", rid, `${nameOf(r.verifier)} rejects request #${rid}: no valid title for the land. It is open to a 1A challenge during the watchdog.`);
+        // the land is not found, has no valid title, or no access is given (R, 13 Oct, section 4.4)
+        const reason = 1 + this.rand(3);
+        if (await this.act(r.verifier, "parties", "rejectRequest", [BigInt(rid), reason, h("rejection evidence", rid)], "reject", rid)) {
+          const why = ["the land is not found", "it has no valid title", "no access was given"][reason - 1];
+          this.note("reject", rid, `${nameOf(r.verifier)} rejects request #${rid}: ${why}. It is open to a 1A challenge during the watchdog.`);
         }
         this.nextAt.set(rid, t + this.watchdog + DAY);
         return;
@@ -1480,43 +1501,40 @@ export class Engine {
   }
 
   /**
-   * The request queue's housekeeping, as the portal does it (V12.1, rule 6): space a release freed in an edition goes
-   * to the earliest waiting request in a higher edition that fits it (promote, which the contract checks), and the
-   * space that leaves frees in turn; once nobody waiting fits, the edition's freed space is settled and opens to new
-   * requests. Anyone may call either; the server does.
+   * The queue's housekeeping, as the portal does it (R, 13 Oct, section 3.3): free room in an edition below the OPEN one
+   * -- SETTLING, so its room serves promotions only -- goes to the earliest waiting request in a higher edition that
+   * fits its room and limit (promote, which the contract checks); the room that leaves frees in turn. Anyone may call
+   * it; the server does.
    */
   async promoteQueue(): Promise<void> {
-    const cur = N(await read("editions", "currentEdition"));
-    if (cur > LAST_EDITION) return;
-    const eds = await Promise.all(Array.from({ length: LAST_EDITION }, (_, i) => read("editions", "editionOf", [i + 1])));
-    if (!eds.some((e: any) => !e.closed && BigInt(e.freed) > 0n)) return;
-    // the waiting requests, by edition, in queue order (the lists carry stale entries: skip them)
+    const top = Math.min(N(await read("editions", "current")), LAST_EDITION);
+    if (top <= 1) return;
+    const eds = await Promise.all(Array.from({ length: top - 1 }, (_, i) => read("editions", "editionOf", [i + 1])));
+    // SETTLING (2) with room; an OPEN edition below the top cannot be
+    if (!eds.some((E: any) => N(E.state) === 2 && BigInt(E.capacity) > BigInt(E.placed))) return;
     const waiting = new Map<number, { id: bigint; ly: bigint }[]>();
-    for (let k = cur; k <= LAST_EDITION; k++) {
+    for (let k = 2; k <= top; k++) {
       const ids = await read<readonly bigint[]>("editions", "waitingIn", [k]);
-      const live: { id: bigint; ly: bigint }[] = [];
-      for (const id of new Set(ids)) {
-        const r = await read("editions", "reservationOf", [id]);
-        if (N(r.edition) === k && !r.fixed_ && !r.sold && !r.released) live.push({ id, ly: BigInt(r.landYears) });
+      const list: { id: bigint; ly: bigint }[] = [];
+      for (const id of ids) {
+        if (!this.lyOf.has(id)) this.lyOf.set(id, BigInt((await read("editions", "reservationOf", [id])).landYears));
+        list.push({ id, ly: this.lyOf.get(id)! });
       }
-      waiting.set(k, live);
+      waiting.set(k, list);
     }
-    for (let e = cur; e <= LAST_EDITION; e++) {
+    for (let e = 1; e < top; e++) {
       for (let guard = 0; guard < 500; guard++) {
         const E = await read("editions", "editionOf", [e]);
-        if (E.closed || BigInt(E.freed) === 0n) break;
+        if (N(E.state) !== 2) break;
         const limit = BigInt(await read("editions", "limitOf", [e]));
-        const room = BigInt(E.capacity) - BigInt(E.reserved);
+        const room = BigInt(E.capacity) - BigInt(E.placed);
         let best: { id: bigint; ly: bigint; k: number } | null = null;
-        for (let k = e + 1; k <= LAST_EDITION; k++) {
+        for (let k = e + 1; k <= top; k++) {
           for (const w of waiting.get(k) ?? []) if (w.ly <= limit && w.ly <= room && (!best || w.id < best.id)) best = { ...w, k };
         }
-        if (!best) {
-          await this.act(this.server, "editions", "settle", [e], "settle");
-          break;
-        }
+        if (!best) break;
         if (!(await this.act(this.server, "editions", "promote", [best.id, e], "promote", N(best.id)))) break;
-        this.note("queue", N(best.id), `Space freed in edition ${e} goes to the earliest waiting request that fits it: #${best.id} moves down from edition ${best.k}.`);
+        this.note("queue", N(best.id), `Room free in edition ${e} goes to the earliest waiting request that fits it: #${best.id} moves down from edition ${best.k}.`);
         waiting.set(best.k, (waiting.get(best.k) ?? []).filter((w) => w.id !== best!.id));
         (waiting.get(e) ?? waiting.set(e, []).get(e)!).push({ id: best.id, ly: best.ly });
       }
@@ -1670,6 +1688,33 @@ export class Engine {
     if (r.tokenId === 0n) return "The covenant has no instalments yet.";
     const ok = await this.vote(Action.FREEZE_DRIP, ["uint256", "bool"], [r.tokenId, frozen], frozen ? "freeze drip" : "unfreeze drip", rid);
     return ok ? `The Council ${frozen ? "holds" : "releases"} #${rid}'s instalments.` : "The Council's vote failed; see Anomalies.";
+  }
+
+  /** The EFT's owner claims its pool (R, 14 Oct): the TR3 is minted to it, and every open listing and offer is void. */
+  async userClaimPool(rid: number): Promise<string> {
+    const r = await read("registry", "getRequest", [BigInt(rid)]);
+    if (r.tokenId === 0n) return "There is no EFT yet.";
+    const v = await read("tree", "rewardOf", [r.tokenId]);
+    if (v.patronClaimable === 0n) return "The pool is empty: nothing has been released since the owner last claimed.";
+    const owner = getAddress(await read<Address>("token", "ownerOf", [r.tokenId]));
+    const ok = await this.act(owner, "tree", "claimPatron", [r.tokenId], "claimPool", rid);
+    return ok ? `${nameOf(owner)} claims #${rid}'s pool; its open listing and offers are now void.` : "The claim was refused; see Anomalies.";
+  }
+
+  /** Another patron offers 10% over the last price, for 7 days: listed or not, the owner may accept it until then. */
+  async userOffer(rid: number): Promise<string> {
+    const r = await read("registry", "getRequest", [BigInt(rid)]);
+    if (r.tokenId === 0n) return "There is no EFT to offer for yet.";
+    const c = await read("core", "getCovenant", [r.tokenId]);
+    if (N(c.status) !== CovenantStatus.ACTIVE) return "Only an active covenant's EFT takes offers.";
+    const owner = getAddress(await read<Address>("token", "ownerOf", [r.tokenId]));
+    const buyer = await this.patronFor(r.tokenId);
+    if (buyer === owner) return "No other patron can buy it now.";
+    const last = await read<bigint>("token", "lastSalePrice", [r.tokenId]);
+    const price = ((last !== 0n ? last : this.priceOf.get(rid) ?? 10n ** 21n) * 110n) / 100n;
+    await this.topUp(buyer, price);
+    const ok = await this.act(buyer, "token", "makeOffer", [r.tokenId, price, BigInt(this.now + 7 * DAY)], "user offer", rid);
+    return ok ? `${nameOf(buyer)} offers for #${rid}, for 7 days.` : "The offer was refused; see Anomalies.";
   }
 
   async userEmergencyFreeze(holder: Address): Promise<string> {

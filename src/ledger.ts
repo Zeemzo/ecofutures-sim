@@ -243,7 +243,7 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
     ...Array.from({ length: 21 }, (_, i) => at("editions", "editionOf", [i + 1])),
   ]);
   // V12.1: the land-years reserved across the editions (sold or not), and the open edition's room for new requests
-  const placed: bigint = eds.reduce((x: bigint, e: any) => x + BigInt(e.reserved), 0n);
+  const placed: bigint = eds.reduce((x: bigint, e: any) => x + BigInt(e.placed), 0n);
   const open = Number(cur) <= 21 ? eds[Number(cur) - 1] : null;
   const burned: bigint = sb.burned;
   const held = await Promise.all([...ledger.heldFor].map((h) => at("bank", "heldForSuccessor", [h])));
@@ -274,7 +274,7 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
   for (const r of rows) tr3Accruing += r.accruing ?? 0n;
   for (const r of rows) if (standingSale(r)) { marketCap += r.price!; sold++; soldProjected += r.projected ?? 0n; }
   // editionInfo: (edition, F, land-years placed in it, its size, opened at, closes by)
-  const used: bigint = open ? BigInt(open.reserved) + BigInt(open.freed) : 0n, capacity: bigint = open ? BigInt(open.capacity) : 0n;
+  const used: bigint = open ? BigInt(open.placed) : 0n, capacity: bigint = open ? BigInt(open.capacity) : 0n;
   return {
     t, block, rows, edition: Number(cur), landYears: placed, tr3Supply: supply, gtas: gtas.length, capacity, burned,
     registryBal, marketBal, bankBal, poolBal, registryHeld, marketHeld, bankHeld, poolHeld, reserve: sb.reserve, inv, counts, bad,

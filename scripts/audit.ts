@@ -43,6 +43,7 @@ const N = (x: unknown) => Number(x);
 const B = (x: unknown) => BigInt(x as any);
 const L = (a: unknown) => String(a).toLowerCase();
 const Z = zeroAddress.toLowerCase();
+const ZH = `0x${"0".repeat(64)}`;
 const keyOf = new Map<string, Key>();
 for (const k of Object.keys(abis) as Key[]) if (addr[k] && L(addr[k]) !== Z) keyOf.set(L(getAddress(addr[k])), k);
 // the contracts that hold money: the Registry (upfront), the Market (the price in escrow), the Bank (the term's
@@ -241,15 +242,15 @@ const trCap = check("tr3-cap", "TR3", "No allocation is above 1,000,000 TR3, and
 const rsClaim = check("resale-claims", "Resale", "The patron's TR3 is minted only by a patron claim, to the EFT's owner at that moment, never in a transfer; a guardian claim mints the patron nothing", "R, 14 Oct, Part 1 items 1-3; Tree.claimPatron, claimGuardian");
 const rsOrd = check("resale-orders", "Resale", "Every resale takes a live order at its price: a listing or an offer made at the EFT's order counter in force, an offer before its expiry", "R, 14 Oct, Part 1 items 4 and 6; EcoFuturesToken.buy, acceptOffer");
 const trSup = check("tr3-supply", "TR3", "TR3's supply = everything the claim events minted = minted to patrons + guardians + referrers", "Tree");
-const plc = check("edition-placement", "Editions", "Each paid request reserves its land-years in the LOWEST edition with room for all of it (freed space not yet settled excluded) whose limit it fits (100 x F ha-yr): one queue for every country, in payment order", "D18 (Ravi's note, rule 1); EcoEditions.reserve")
-const cls = check("edition-close", "Editions", "An edition closes only when all its space is sold, or eight protocol years after it opened; what no request reserved is burned, and the next not yet closed opens (at the clock's mark, or now)", "D18 (rule 9); EcoEditions._close, _roll")
-const edState = check("edition-state", "Editions", "The editions replayed from the events end where EcoEditions is now: each edition's reserved, sold and freed land-years, whether it is closed and when it opened, and the edition whose clock runs", "EcoEditions.editionOf, current")
-const plRel = check("place-released", "Editions", "A reservation is released exactly when its request ends without a sale (cancelled, rejected, failed, refused, lapsed, unsold...): its space is freed while the edition is open, else burned, and nothing is credited to the Reserve; a sold land is never released", "D18 (rules 5, 8); EcoEditions.release; EcoRegistry._finish")
-const qMove = check("queue-promotion", "Editions", "Space freed goes, in queue order, to the earliest waiting request in a higher edition that fits it: every move is down, into an open edition whose room and limit it fits, with no earlier waiting request in any higher edition that fits; freed space is settled (opened to new requests) only when nobody waiting fits it", "D18 (rule 6); EcoEditions.promote, settle")
-const qFix = check("edition-fixed", "Editions", "A request's edition is fixed only when its auction ends with a winner, and unfixed only when that sale is called off (a failed KYC; path B's refund to relist), its reservation kept; a fixed request never moves", "D18 (rule 7); EcoMarket.settleAuction, cancelStaleSale, refundSale")
-const asg = check("edition-assignment", "Editions", "Each covenant activates in the edition fixed at its auction, sold there with its land-years at that edition's rate (capped at 1,000,000, the excess burned)", "D18 (rule 8); EcoEditions.sell; Tree.assignEdition")
-const qAssign = check("verifier-assigned", "Requests", "A request no verifier claimed is assigned only after a whole acceptance window unclaimed (and any first claim over), by an active Trust Admin of its country, to a verifier of the country who could claim it; no request is ever ended for want of a verifier", "D18 (rule 3); EcoParties.assignVerifier")
-const qReject = check("rejection", "Requests", "A rejection (an EcoScore of 0) is filed by the claiming verifier inside its claim; it ends the request only after the watchdog has closed with no challenge open, the verification fee to the verifier and the rest refunded; an upheld 1A reopens it", "D18 (rule 4); EcoRegistry.submitVerification, cancelRequest")
+const plc = check("edition-placement", "Editions", "Each paid request takes its place at sign-up, wholly, in the OPEN edition -- never a SETTLING one -- within its limit (100 x F ha-yr); a land that does not fit the room left goes to the next edition, which opens; only the 21st's last land takes less than it asked (the room left)", "R, 13 Oct, section 3.1 (D17, D1); EcoEditions.reserve")
+const cls = check("edition-close", "Editions", "Editions open one at a time: the next when the OPEN one becomes SETTLING (its room fully placed, or a land overflowing it; its room kept) or closes; each closes only when all its room is sold, or 8 protocol years after it opened (in the year in force then), when what no request placed is burned", "R, 13 Oct, sections 3.1-3.2, fix 11; EcoEditions._settle, _close, _roll")
+const edState = check("edition-state", "Editions", "The editions replayed from the events end where EcoEditions is now: each edition's placed and sold land-years, its state and when it opened, and the OPEN edition", "EcoEditions.editionOf, current, currentEdition")
+const plRel = check("place-released", "Editions", "A place is released exactly when its request ends without a sale (cancelled, rejected, failed, refused, lapsed, unsold...): its room returns to its edition while it has not closed, else is burned, and nothing is credited to the Reserve; a sold land is never released", "R, 13 Oct, section 3.6; EcoEditions.release; EcoRegistry._finish")
+const qMove = check("queue-promotion", "Editions", "Free room goes, in queue order, to the earliest waiting request in a higher edition that fits it: every move is down, of a waiting (unfixed) place, into an edition not closed whose room and limit it fits, with no earlier waiting request in any edition above it that fits", "R, 13 Oct, section 3.3; EcoEditions.promote")
+const qFix = check("edition-fixed", "Editions", "A place is fixed only when its auction ends with a winner, and unfixed only when that sale is called off (a failed KYC; path B's lapse to relist), the place kept; a fixed place never moves", "R, 13 Oct, section 3.4; EcoMarket.settleAuction, cancelStaleSale, refundSale")
+const asg = check("edition-assignment", "Editions", "Each covenant activates in the edition fixed at its auction, sold there with its land-years at that edition's rate (capped at 1,000,000, the excess burned)", "R, 13 Oct, section 3.5; EcoEditions.sell; Tree.assignEdition")
+const qAssign = check("verifier-assigned", "Requests", "A request no verifier claimed is assigned by an active Holder of its country, to one of its own verifiers, only after 30 days unclaimed (and any first claim over); by the Council only after 60; no request is ever ended for want of a verifier", "R, 13 Oct, section 4.1-4.3; EcoParties.assignVerifier, reassignVerifier")
+const qReject = check("rejection", "Requests", "A rejection is filed by the claiming verifier inside its claim, with a reason (land not found, no valid title, no access given) and evidence; it ends the request only after the watchdog has closed with no challenge open, the verification fee to the verifier and the rest refunded; an upheld 1A reopens it", "R, 13 Oct, section 4.4; EcoParties.rejectRequest; EcoRegistry.cancelRequest")
 const rew = check("tr3-reward", "TR3", "Each covenant's stream starts with its sale's allocation (TR3 at a score of 100), at the covenant's score", "Tree.startReward; TR3 model v6");
 const relScore = check("tr3-release-score", "TR3", "Each release is at the score in force since the last (at the new score when the release lifts a 3B hold), and the score's shortfall goes to the Reserve: released = floor((released + credited) x score / 100)", "Tree._settle, pass; addendum (ECOSCORE source); FM p16 (3B back-paid at the corrected score)");
 const strCons = check("tr3-stream-conservation", "TR3", "Every allocation is accounted exactly: what was released + what was credited to the Reserve (score shortfall, late days, holds, an early end, an acquired part) = the allocation once the stream ends, and never more before", "Tree._settle, _end, endPart; addendum");
@@ -362,13 +363,15 @@ type Ch = { cid: bigint; option: number; subject: bigint; challenger: string; de
   firstPool?: bigint; before?: { status: number; blockReason: number; win?: Win; lastAttester: string } ; ended: boolean };
 const chs = new Map<bigint, Ch>();
 const relics = new Map<bigint, { edition: number; cap: bigint }>();
-// V12.1's queue, replayed: each request's reservation, and each edition's reserved, sold and freed land-years
+// the editions, replayed (R, 13 Oct, section 3): each request's place, and each edition's placed and sold land-years,
+// its state, when it opened and its clock
 type Place = { rid: number; edition: number; ly: bigint; full: bigint; fixed: boolean; sold: boolean; released: boolean };
 const places = new Map<number, Place>();
-const edR: bigint[] = Array(LAST_EDITION + 2).fill(0n), edS: bigint[] = Array(LAST_EDITION + 2).fill(0n), edF: bigint[] = Array(LAST_EDITION + 2).fill(0n);
+const edR: bigint[] = Array(LAST_EDITION + 2).fill(0n), edS: bigint[] = Array(LAST_EDITION + 2).fill(0n);
 const edOpened: number[] = Array(LAST_EDITION + 2).fill(0), edClosed: boolean[] = Array(LAST_EDITION + 2).fill(false);
-let lastClose: { e: number; byClock: boolean; mark: number } | null = null;
-const fitsNew = (e: number, ly: bigint) => !edClosed[e] && ly <= limitOf(e) && edR[e] + edF[e] + ly <= capOf(e);
+const edSettling: boolean[] = Array(LAST_EDITION + 2).fill(false), edClock: number[] = Array(LAST_EDITION + 2).fill(0);
+/** The next edition to open, and when: set when the OPEN edition settles or closes. */
+let nextOpen: { n: number; at: number } | null = null;
 const fitsMove = (e: number, ly: bigint) => ly <= limitOf(e) && edR[e] + ly <= capOf(e);
 /** Whether a waiting request earlier than `before`, in an edition above e, fits e's room. */
 const waitingFits = (before: number, e: number) => [...places.values()].some((q) => q.edition > e && !q.fixed && !q.sold && !q.released && q.rid < before && fitsMove(e, q.ly));
@@ -377,7 +380,7 @@ const owners = new Map<bigint, string>();
 const orderCounter = new Map<bigint, number>();
 const resaleListings = new Map<bigint, { counter: number; price: bigint }>();
 const resaleOffers = new Map<string, { counter: number; price: bigint; expiry: number }>();
-// the edition model, replayed: the open edition, its land-years and when it opened (Tree's initialisation)
+// the edition model, replayed: the OPEN edition; each edition's 8 years in the year in force when it opened
 const clock = 8 * cfg.year;
 let ed = 1;
 let capBurn = 0n, closesCount = 0, moves = 0, fixes = 0, unfixes = 0, edBurn = 0n;
@@ -527,14 +530,20 @@ for (const e of events) {
       const r = reqs.get(N(a.requestId))!;
       r.verifier = L(a.newVerifier);
       r.assignedFrom = r.status;
-      if (r.status === RequestStatus.OPEN) { r.status = RequestStatus.CLAIMED; r.claimedAt = t; } // assigned (rule 3)
-      else if (r.status === RequestStatus.CLAIMED) r.claimedAt = t;
+      if (r.status === RequestStatus.OPEN) {
+        // assigned (section 4): by a Holder (VerifierAssigned follows in the same call), or by the Council from day 60
+        if (inTx(e, "parties.VerifierAssigned", (x) => N(x.a.requestId) === r.rid).length === 0) {
+          qAssign.test(t > r.openedAt + 2 * cfg.acceptance && t > r.firstClaimUntil && L(a.newVerifier) !== r.guardian, `#${r.rid}`,
+            () => `the Council assigned ${short(a.newVerifier)} ${days(t - r.openedAt)} after the sign-up`);
+        }
+        r.status = RequestStatus.CLAIMED; r.claimedAt = t;
+      } else if (r.status === RequestStatus.CLAIMED) r.claimedAt = t;
       break;
     }
     case "parties.VerifierAssigned": {
       const r = reqs.get(N(a.requestId))!, v = L(a.verifier), h = L(a.holder);
       qAssign.test(r.assignedFrom === RequestStatus.OPEN && t > r.openedAt + cfg.acceptance && t > r.firstClaimUntil
-        && holders.get(h)?.country === r.country && !isFrozen(h) && verifiers.get(v)?.country === r.country && takesWork(v) && v !== r.guardian,
+        && holders.get(h)?.country === r.country && !isFrozen(h) && holderOf(v) === h && takesWork(v) && v !== r.guardian,
         `#${r.rid}`, () => `assigned ${date(t)} by ${short(h)} to ${short(v)}; open since ${date(r.openedAt)}, status ${r.status}`);
       break;
     }
@@ -542,7 +551,18 @@ for (const e of events) {
       const r = reqs.get(N(a.requestId))!;
       acc.test(L(a.verifier) === r.verifier && t <= r.claimedAt + cfg.acceptance, `#${r.rid}`, () => `submitted ${days(t - r.claimedAt)} after the claim`);
       r.verifiedAt = t; r.status = RequestStatus.VERIFIED; r.cursor = 0; r.stepAt = t + cfg.watchdog; // the flow opens when the watchdog closes (D8)
-      r.rejected = N(a.ecoScore) === 0; // a rejection (V12.1, rule 4)
+      r.rejected = false;
+      break;
+    }
+    case "parties.RequestRejected": {
+      // a rejection in place of a verification (R, 13 Oct, section 4.4): the watchdog opens as for a verification
+      const r = reqs.get(N(a.requestId))!;
+      qReject.test(L(a.verifier) === r.verifier && r.status === RequestStatus.CLAIMED && t <= r.claimedAt + cfg.acceptance
+        && N(a.reason) >= 1 && N(a.reason) <= 3 && a.evidenceHash !== ZH, `#${r.rid}`,
+        () => `rejected by ${short(a.verifier)} (the claim is ${short(r.verifier)}'s, ${days(t - r.claimedAt)} old), reason ${a.reason}`);
+      acc.test(t <= r.claimedAt + cfg.acceptance, `#${r.rid}`, () => `rejected ${days(t - r.claimedAt)} after the claim`);
+      r.verifiedAt = t; r.status = RequestStatus.VERIFIED; r.cursor = 0; r.stepAt = t + cfg.watchdog;
+      r.rejected = true;
       break;
     }
     case "registry.RequestReopened": {
@@ -1122,23 +1142,31 @@ for (const e of events) {
 
     // ---- TR3 ----
     case "editions.EditionOpened": {
-      const n = N(a.edition), at = N(a.at);
+      const n = N(a.edition), at = N(a.at), ck = N(a.clock) || clock;
       let why = "";
-      if (lastClose) {
-        let next = lastClose.e + 1;
-        while (next <= LAST_EDITION && edClosed[next]) next++;
-        if (n !== next) why = `edition ${n} opened after ${lastClose.e} closed; the next not closed is ${next}`;
-        else if (at !== (lastClose.byClock ? lastClose.mark : t)) why = `opened at ${date(at)}`;
-      } else if (n !== 1) why = `the first edition to open is ${n}`;
+      if (nextOpen) {
+        if (n !== nextOpen.n) why = `edition ${n} opened; the next to open was ${nextOpen.n}`;
+        else if (at !== nextOpen.at) why = `opened at ${date(at)}, not ${date(nextOpen.at)}`;
+      } else if (n !== 1) why = `edition ${n} opened with no edition settling or closing`;
+      if (!why && ck !== clock) why = `its clock is ${days(ck)}, not 8 years of ${days(cfg.year)}`;
       cls.test(why === "", `edition ${n}`, () => why);
-      edOpened[n] = at; ed = n; lastClose = null;
+      edOpened[n] = at; edClock[n] = ck; ed = n; nextOpen = null;
+      break;
+    }
+    case "editions.EditionSettling": {
+      const en = N(a.edition);
+      cls.test(en === ed && !edSettling[en] && !edClosed[en] && B(a.placed) === edR[en], `edition ${en}`,
+        () => `settled with ${a.placed} placed (replayed ${edR[en]}); the OPEN edition is ${ed}`);
+      edSettling[en] = true;
+      if (en < LAST_EDITION) nextOpen = { n: en + 1, at: t };
       break;
     }
     case "editions.Reserved": {
       const rid = N(a.requestId), r = reqs.get(rid)!, en = N(a.edition), ly = B(a.landYears), asked = r.units * BigInt(r.term);
-      let want = 0;
-      for (let k = ed; k <= LAST_EDITION; k++) if (fitsNew(k, asked)) { want = k; break; }
-      plc.test(en === want && ly === asked, `#${rid}`, () => `reserved ${ly} of ${asked} land-years in edition ${en}; the lowest with room and a limit that fits is ${want}`);
+      // the OPEN edition takes it, after any overflow in the same call has opened the next; only the 21st trims
+      const trimmed = en === LAST_EDITION && ly === capOf(en) - edR[en] && ly < asked;
+      plc.test(en === ed && !edSettling[en] && !edClosed[en] && (ly === asked || trimmed) && ly <= limitOf(en) && edR[en] + ly <= capOf(en), `#${rid}`,
+        () => `placed ${ly} of ${asked} land-years in edition ${en}; the OPEN edition is ${ed} (settling ${edSettling[en]}, ${edR[en]} of ${capOf(en)} placed)`);
       edR[en] += ly;
       places.set(rid, { rid, edition: en, ly, full: 0n, fixed: false, sold: false, released: false });
       break;
@@ -1149,27 +1177,19 @@ for (const e of events) {
       const credited = inTx(e, "tree.ReserveCredited", () => true).length > 0;
       const closed = edClosed[en], burn = closed ? (ly * PER_EDITION) / capOf(en) : 0n;
       plRel.test(!!p && !p.released && !p.sold && p.edition === en && p.ly === ly && B(a.burned) === burn && endedTx && !credited, `#${rid}`,
-        () => `released edition ${en}, ${ly} land-years, burned ${usd(B(a.burned))} (expected ${usd(burn)}); its reservation: edition ${p?.edition}, ${p?.ly}${endedTx ? "" : ", with no request ending"}${credited ? ", and the Reserve credited" : ""}`);
+        () => `released edition ${en}, ${ly} land-years, burned ${usd(B(a.burned))} (expected ${usd(burn)}); its place: edition ${p?.edition}, ${p?.ly}${endedTx ? "" : ", with no request ending"}${credited ? ", and the Reserve credited" : ""}`);
       if (p) p.released = true;
       edR[en] -= ly;
-      if (!closed) edF[en] += ly;
       edBurn += B(a.burned);
       break;
     }
     case "editions.Moved": {
       const rid = N(a.requestId), p = places.get(rid), from = N(a.from), to = N(a.to), ly = B(a.landYears);
-      const ok = !!p && !p.fixed && !p.sold && !p.released && p.edition === from && to < from && to >= ed && !edClosed[to] && fitsMove(to, ly) && !waitingFits(rid, to);
-      qMove.test(ok, `#${rid}`, () => `moved ${from} -> ${to}: fits ${fitsMove(to, ly)}, an earlier waiting request fits ${waitingFits(rid, to)}, fixed ${p?.fixed}`);
-      edR[from] -= ly; edF[from] += ly; edR[to] += ly; edF[to] = edF[to] > ly ? edF[to] - ly : 0n;
+      const ok = !!p && !p.fixed && !p.sold && !p.released && p.edition === from && to < from && edOpened[to] !== 0 && !edClosed[to] && fitsMove(to, ly) && !waitingFits(rid, to);
+      qMove.test(ok, `#${rid}`, () => `moved ${from} -> ${to}: fits ${fitsMove(to, ly)}, an earlier waiting request fits ${waitingFits(rid, to)}, fixed ${p?.fixed}, edition ${to} closed ${edClosed[to]}`);
+      edR[from] -= ly; edR[to] += ly;
       if (p) p.edition = to;
       moves++;
-      break;
-    }
-    case "editions.FreedSettled": {
-      const en = N(a.edition);
-      qMove.test(B(a.landYears) === edF[en] && (edClosed[en] || !waitingFits(Number.MAX_SAFE_INTEGER, en)), `edition ${en}`,
-        () => `settled ${a.landYears} (freed ${edF[en]}) with a waiting request that fits: ${waitingFits(Number.MAX_SAFE_INTEGER, en)}`);
-      edF[en] = 0n;
       break;
     }
     case "editions.Fixed": {
@@ -1202,12 +1222,13 @@ for (const e of events) {
     case "editions.EditionClosed": {
       const en = N(a.edition), cap = capOf(en), byClock = !!a.byClock, burn = ((cap - edR[en]) * PER_EDITION) / cap;
       let why = "";
-      if (byClock) { if (en !== ed || t < edOpened[en] + clock) why = `closed by the clock ${date(t)}; edition ${ed} opened ${date(edOpened[en])}`; }
+      if (byClock) { if (t < edOpened[en] + edClock[en]) why = `closed by the clock ${date(t)}; it opened ${date(edOpened[en])} with ${days(edClock[en])}`; }
       else if (edS[en] !== cap) why = `closed with ${edS[en]} of ${cap} land-years sold`;
-      cls.test(why === "" && B(a.reserved) === edR[en] && B(a.sold) === edS[en] && B(a.burned) === burn, `edition ${en}`,
-        () => why || `closed with ${a.reserved} reserved, ${a.sold} sold, ${usd(B(a.burned))} burned; replayed ${edR[en]}, ${edS[en]}, ${usd(burn)}`);
-      edClosed[en] = true; edF[en] = 0n; edBurn += B(a.burned); closesCount++;
-      if (en === ed) lastClose = { e: en, byClock, mark: edOpened[en] + clock };
+      cls.test(why === "" && B(a.placed) === edR[en] && B(a.sold) === edS[en] && B(a.burned) === burn, `edition ${en}`,
+        () => why || `closed with ${a.placed} placed, ${a.sold} sold, ${usd(B(a.burned))} burned; replayed ${edR[en]}, ${edS[en]}, ${usd(burn)}`);
+      edClosed[en] = true; edBurn += B(a.burned); closesCount++;
+      if (en === ed && en < LAST_EDITION && !edSettling[en]) nextOpen = { n: en + 1, at: byClock ? edOpened[en] + edClock[en] : t };
+      if (en === ed && en === LAST_EDITION) ed = LAST_EDITION + 1;
       break;
     }
     case "tree.EditionAssigned": {
@@ -1430,26 +1451,33 @@ for (const p of places.values()) {
 {
   const [curNow, clockNow, ...eds] = await Promise.all([rd("editions", "current"), rd("editions", "currentEdition"),
     ...Array.from({ length: LAST_EDITION }, (_, i) => rd("editions", "editionOf", [i + 1]))]);
+  // the clocks as they stand now: an edition whose 8 years are up is closed though nobody has rolled it, and the OPEN
+  // one's successors open at its mark (EcoEditions._now); what those closes burn is in burnedTotal
+  const shut = (n: number) => edClosed[n] || (edOpened[n] !== 0 && now >= edOpened[n] + edClock[n]);
+  let clockBurn = 0n;
+  for (let n = 1; n <= LAST_EDITION; n++) if (!edClosed[n] && shut(n)) clockBurn += ((capOf(n) - edR[n]) * PER_EDITION) / capOf(n);
+  let n2 = ed;
+  const virt = new Set<number>(); // editions the clock opened and closed with nobody rolling it
+  if (n2 <= LAST_EDITION && shut(n2)) {
+    let mark = edOpened[n2] + edClock[n2];
+    while (n2 <= LAST_EDITION) {
+      if (n2 === LAST_EDITION) { n2 = LAST_EDITION + 1; break; }
+      n2++;
+      if (now >= mark + clock) { virt.add(n2); clockBurn += PER_EDITION; mark += clock; } else break;
+    }
+  }
+  const stateOf = (n: number) => shut(n) || virt.has(n) ? 3 : edOpened[n] === 0 ? (n === n2 ? 1 : 0) : edSettling[n] ? 2 : 1;
   for (let n = 1; n <= LAST_EDITION; n++) {
     const x = eds[n - 1];
-    edState.test(B(x.reserved) === edR[n] && B(x.sold) === edS[n] && B(x.freed) === edF[n] && !!x.closed === edClosed[n] && N(x.openedAt) === edOpened[n], `edition ${n}`,
-      () => `EcoEditions: reserved ${x.reserved}, sold ${x.sold}, freed ${x.freed}, closed ${x.closed}, opened ${date(N(x.openedAt))}; replayed ${edR[n]}, ${edS[n]}, ${edF[n]}, ${edClosed[n]}, ${date(edOpened[n])}`);
+    edState.test(B(x.placed) === edR[n] && B(x.sold) === edS[n] && N(x.state) === stateOf(n) && N(x.openedAt) === edOpened[n], `edition ${n}`,
+      () => `EcoEditions: placed ${x.placed}, sold ${x.sold}, state ${x.state}, opened ${date(N(x.openedAt))}; replayed ${edR[n]}, ${edS[n]}, ${stateOf(n)}, ${date(edOpened[n])}`);
   }
   edState.test(N(curNow) === ed, "current", () => `EcoEditions' current edition ${curNow}; replayed ${ed}`);
-  // the clock as it stands now: what it has closed that nobody has written yet (EcoEditions.burnedTotal)
-  let clockBurn = 0n, n2 = ed, o2 = edOpened[ed] ?? 0;
-  while (n2 <= LAST_EDITION && now >= o2 + clock) {
-    clockBurn += ((capOf(n2) - edR[n2]) * PER_EDITION) / capOf(n2);
-    const mark = o2 + clock;
-    n2++;
-    while (n2 <= LAST_EDITION && edClosed[n2]) n2++;
-    o2 = mark;
-  }
-  edState.test(N(clockNow) === n2, "clock", () => `EcoEditions counts edition ${clockNow} now; replayed ${n2}`);
-  // the space not yet sold and not burned: open editions' unsold space, and live reservations in closed ones
+  edState.test(N(clockNow) === n2, "clock", () => `EcoEditions counts edition ${clockNow} open now; replayed ${n2}`);
+  // the room not yet sold and not burned: unsold room in editions not closed, and live places in closed ones
   let unplacedEv = 0n;
   for (let n = 1; n <= LAST_EDITION; n++) {
-    const closed = edClosed[n] || n < n2, cap = capOf(n);
+    const closed = shut(n) || virt.has(n), cap = capOf(n);
     unplacedEv += ((closed ? edR[n] - edS[n] : cap - edS[n]) * PER_EDITION) / cap;
   }
   const [sb, unplaced, supply, mp, mg, mr] = await Promise.all([rd("tree", "supplyBreakdown"), rd("editions", "unallocatedTR3"), rd("tree", "totalSupply"),
@@ -1474,9 +1502,10 @@ for (const p of places.values()) {
     current: ed, closed: closesCount, byClock: E("editions.EditionClosed").filter((e) => e.a.byClock).length,
     burnedByCloses: usd(E("editions.EditionClosed").reduce((x, e) => x + B(e.a.burned), 0n)),
     reservations: E("editions.Reserved").length, released: E("editions.Released").length, promotions: moves,
-    settled: E("editions.FreedSettled").length, fixed: fixes, unfixed: unfixes, sold: E("editions.Sold").length,
-    assigned: E("parties.VerifierAssigned").length, rejected: E("registry.RequestEnded").filter((e) => N(e.a.reason) === 11).length,
-    reservedInEdition: Object.fromEntries(Array.from({ length: LAST_EDITION }, (_, i) => [i + 1, String(edR[i + 1])]).filter(([, v]) => v !== "0")),
+    settling: E("editions.EditionSettling").length, fixed: fixes, unfixed: unfixes, sold: E("editions.Sold").length,
+    assignedByHolders: E("parties.VerifierAssigned").length, rejectionsFiled: E("parties.RequestRejected").length,
+    rejected: E("registry.RequestEnded").filter((e) => N(e.a.reason) === 11).length,
+    placedInEdition: Object.fromEntries(Array.from({ length: LAST_EDITION }, (_, i) => [i + 1, String(edR[i + 1])]).filter(([, v]) => v !== "0")),
   };
 }
 
