@@ -6,7 +6,9 @@
 //   RPC=http://127.0.0.1:8546 SCENARIO=fill SEED=1 YEARS=60 npx tsx scripts/headless.ts
 //
 // SCENARIO is a scenario id from src/config.ts; EDITION_SCALE and RATE override it; START sets the start date.
-import { latestBlock, mineAt, logsBetween, prepareChain, timing, SETUP_LEAD } from "../src/chain";
+// DEPLOYMENT_OUT=path writes the deployed addresses there, in the shape of the contracts' docs/integration
+// addresses file -- so a platform backend can index this chain as it runs (chain id 31337, its own forwarder).
+import { latestBlock, mineAt, logsBetween, prepareChain, timing, SETUP_LEAD, addr } from "../src/chain";
 import { deploy } from "../src/deploy";
 import { Engine } from "../src/engine";
 import { Ledger, census, INVARIANTS } from "../src/ledger";
@@ -33,6 +35,16 @@ await prepareChain();
 const t0 = performance.now();
 await mineAt(start - SETUP_LEAD);
 await deploy(sc, (m) => console.log(`  ${m}`));
+if (process.env.DEPLOYMENT_OUT) {
+  const names: Record<string, string> = { admin: "EcoFuturesAdmin", countries: "EcoCountries", registry: "EcoRegistry", deeds: "EcoDeeds",
+    editions: "EcoEditions", core: "EcoFuturesCore", market: "EcoMarket", bank: "EcoBank", challenge: "EcoChallenge", parties: "EcoParties",
+    governance: "EcoFuturesGovernance", tree: "Tree", token: "EcoFuturesToken", overcharge: "EcoOvercharge", lens: "EcoLens",
+    forwarder: "EcoForwarder", usdt: "FreeToken" };
+  const out = { network: "anvil (ecofutures-sim)", chainId: 31337, scenario: sc.id, deployedAt: (await latestBlock()).timestamp,
+    contracts: Object.fromEntries(Object.entries(names).filter(([k]) => (addr as any)[k]).map(([k, n]) => [n, (addr as any)[k]])) };
+  fs.writeFileSync(process.env.DEPLOYMENT_OUT, JSON.stringify(out, null, 2));
+  console.log(`  addresses written to ${process.env.DEPLOYMENT_OUT}`);
+}
 setYear(sc.contracts.yearDays);
 setCountries(sc.countries.map((c) => ({ code: c.code, name: c.name, short: c.short, flow: FLOWS.find((f) => f.id === c.flowId)?.name ?? "" })));
 const e = new Engine(seed, sc);

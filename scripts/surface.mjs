@@ -64,7 +64,13 @@ function accessOf(src, fn, mutability) {
     const semi = src.indexOf(";", m.index);
     if (brace < 0 || (semi >= 0 && semi < brace)) continue; // an interface declaration
     const header = src.slice(m.index, brace);
-    const body = src.slice(brace, brace + 700);
+    // the body up to its own closing brace (a fixed window ran into the next function and borrowed its rule)
+    let depth = 0, end = brace;
+    for (; end < src.length; end++) {
+      if (src[end] === "{") depth++;
+      else if (src[end] === "}" && --depth === 0) break;
+    }
+    const body = src.slice(brace, end + 1);
     const who = [];
     for (const r of header.matchAll(/(?:authorised|onlyRole)\(Roles\.([A-Z_]+)\)/g)) who.push(`Only ${ROLE_NAMES[r[1]] ?? r[1]}`);
     for (const r of body.matchAll(/_only\(_dir\.([a-z]+)\)/g)) who.push(`Only the ${r[1] === "governance" ? "Council (Governance)" : r[1].charAt(0).toUpperCase() + r[1].slice(1)} contract`);
