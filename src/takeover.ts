@@ -3,12 +3,13 @@ import { isAddress, type Abi, type AbiFunction, type Address } from "viem";
 import { abis, send, type Key } from "./chain";
 import { nameOf, knownActors, dateOf } from "./model";
 import { ROLES, ROLE_CALLS, ROLE_LABEL, roleOf, type Control, type Move } from "./control";
-import { parseValue, placeholder, type Param } from "./explorer";
+import { parseValue, fieldHtml, wirePreviews, type Param } from "./explorer";
+import { kindOf, toInputText } from "./units";
 
 const esc = (s: string) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 const SHORT: Record<string, string> = {
   admin: "Admin", countries: "Countries", registry: "Registry", deeds: "Deeds", core: "Core", bank: "Bank", challenge: "Challenge",
-  governance: "Governance", tree: "Tree", token: "Token", lens: "Lens", usdt: "USDT",
+  governance: "Governance", tree: "Tree", token: "Token", lens: "Lens", lists: "Lists", usdt: "USDT",
 };
 
 export type TakeoverHooks = {
@@ -33,21 +34,21 @@ function asText(v: unknown): string {
 /** A contract's error name in plain words: NotBoundVerifier -> "not bound verifier". */
 const plain = (e: string) => e.replace(/\(.*$/, "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
 
-function argFields(f: AbiFunction, values: unknown[] | null, prefix: string): string {
+/** The call's fields, pre-filled with `values` in each parameter's unit (money in whole tokens, dates as dates). */
+function argFields(c: Key, f: AbiFunction, values: unknown[] | null, prefix: string): string {
   return f.inputs.map((p, i) => {
-    const v = values ? asText(values[i]) : "";
-    const field = p.type === "bool"
-      ? `<select data-${prefix}="${i}"><option ${v === "false" ? "selected" : ""}>false</option><option ${v === "true" ? "selected" : ""}>true</option></select>`
-      : `<input data-${prefix}="${i}" type="text" value="${esc(v)}" placeholder="${esc(placeholder(p as Param))}" ${p.type === "address" ? `list="actors"` : ""}>`;
-    return `<label class="arg"><span><b>${esc(p.name || `arg ${i + 1}`)}</b> <code>${esc(p.type)}</code></span>${field}</label>`;
+    const raw = values ? values[i] : undefined;
+    const v = values ? (toInputText(kindOf(c, f.name, p.name ?? "", p.type), raw) ?? asText(raw)) : "";
+    return `<label class="arg"><span><b>${esc(p.name || `arg ${i + 1}`)}</b> <code>${esc(p.type)}</code></span>${fieldHtml(p as Param, i, `data-${prefix}`, { c, fn: f.name }, v)}</label>`;
   }).join("");
 }
 
-function readArgs(root: Element, f: AbiFunction, prefix: string): unknown[] {
-  return f.inputs.map((p, i) => parseValue(p as Param, root.querySelector<HTMLInputElement>(`[data-${prefix}="${i}"]`)!.value));
+function readArgs(root: Element, c: Key, f: AbiFunction, prefix: string): unknown[] {
+  return f.inputs.map((p, i) => parseValue(p as Param, root.querySelector<HTMLInputElement>(`[data-${prefix}="${i}"]`)!.value, { c, fn: f.name }));
 }
 
 export function mountTakeover(root: HTMLElement, hooks: TakeoverHooks) {
+  wirePreviews(root);
   let kind: "actor" | "request" | "role" | "country" = "actor";
   let freeWho = "";
   let freeFn = "";
@@ -69,7 +70,7 @@ export function mountTakeover(root: HTMLElement, hooks: TakeoverHooks) {
       <div class="move-head"><b>${esc(nameOf(m.who))}</b> <span class="muted small">${esc(roleOf(m.who) || "actor")}</span>
         <span class="small">${m.rid ? `request #${m.rid} · ` : ""}${dateOf(m.t)}</span></div>
       <code class="sig">${esc(SHORT[m.c] ?? m.c)}.${esc(m.fn)}</code>
-      ${f ? `<div class="move-args">${argFields(f, m.args, "marg")}</div>` : ""}
+      ${f ? `<div class="move-args">${argFields(m.c, f, m.args, "marg")}</div>` : ""}
       ${err ? `<p class="small err">Reverted: ${esc(plain(err))} <span class="mono">(${esc(err)})</span></p>` : ""}
       <div class="row"><button type="button" class="primary" data-do="${esc(m.id)}">Do it</button><button type="button" class="ghost" data-skip="${esc(m.id)}">Skip</button></div></li>`;
   }
@@ -105,7 +106,7 @@ export function mountTakeover(root: HTMLElement, hooks: TakeoverHooks) {
       <p class="small muted">Any call the role makes, as anyone in the cast, with values you choose.</p>
       <div class="row"><select id="freeWho" aria-label="Act as">${actors.map((a) => `<option value="${a.address}" ${a.address === freeWho ? "selected" : ""}>${esc(a.name)} · ${esc(a.role)}</option>`).join("")}</select>
         <select id="freeFn" aria-label="Call">${calls.map(([k, f]) => `<option value="${k}.${f}" ${`${k}.${f}` === freeFn ? "selected" : ""}>${esc(SHORT[k] ?? k)}.${esc(f)}</option>`).join("")}</select></div>
-      <form id="freeForm" class="move-args">${ff ? argFields(ff, null, "farg") : ""}<div class="row"><button type="submit" class="primary" ${ff ? "" : "disabled"}>Send</button><span class="small" id="freeOut">${esc(freeResult)}</span></div></form>`;
+      <form id="freeForm" class="move-args">${ff ? argFields(fk, ff, null, "farg") : ""}<div class="row"><button type="submit" class="primary" ${ff ? "" : "disabled"}>Send</button><span class="small" id="freeOut">${esc(freeResult)}</span></div></form>`;
   }
 
   root.addEventListener("change", (e) => {
@@ -154,7 +155,7 @@ export function mountTakeover(root: HTMLElement, hooks: TakeoverHooks) {
       const f = m && fnOf(m.c, m.fn, m.args.length);
       if (!m || !f || !card) return;
       let args: unknown[];
-      try { args = readArgs(card, f, "marg"); } catch (err) { errors.set(id, (err as Error).message); render(); return; }
+      try { args = readArgs(card, m.c, f, "marg"); } catch (err) { errors.set(id, (err as Error).message); render(); return; }
       (el as HTMLButtonElement).disabled = true;
       hooks.enqueue(async () => {
         const r = await send(m.who, m.c, m.fn, args);
@@ -173,7 +174,7 @@ export function mountTakeover(root: HTMLElement, hooks: TakeoverHooks) {
     const f = fnOf(k, fn);
     if (!f) return;
     let args: unknown[];
-    try { args = readArgs(form, f, "farg"); } catch (err) { out.textContent = `Not sent: ${(err as Error).message}`; return; }
+    try { args = readArgs(form, k, f, "farg"); } catch (err) { out.textContent = `Not sent: ${(err as Error).message}`; return; }
     const who = freeWho as Address;
     freeResult = "Queued: it runs between the clock's steps.";
     out.textContent = freeResult;

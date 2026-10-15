@@ -7,6 +7,7 @@ import { latestBlock, mineAt, logsBetween, snapshot, revertTo, read, prepareChai
 import { deploy } from "./deploy";
 import { mountSetup, type Choice } from "./setup";
 import { mountExplorer } from "./explorer";
+import { setChainNow } from "./units";
 import { mountTakeover } from "./takeover";
 import type { Decoded } from "./chain";
 import { FLOWS, PRODUCTION, TIMINGS, LISTING_DAYS, type Scenario } from "./config";
@@ -1006,7 +1007,11 @@ function wire() {
   $("scrim").onclick = closeDrawer;
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeDrawer();
-    if (e.key === " " && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLButtonElement) && S.ready) {
+    // a space typed in a field is a space (a JSON filter in a textarea included), not play/pause
+    const t = e.target;
+    const typing = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement
+      || t instanceof HTMLButtonElement || (t instanceof HTMLElement && t.isContentEditable);
+    if (e.key === " " && !typing && S.ready) {
       e.preventDefault();
       $("play").click();
     }
@@ -1047,6 +1052,8 @@ document.querySelector(".views")!.addEventListener("click", (e) => {
   if (b) setView(b.dataset.view as "sim" | "explorer");
 });
 
+// "now" in a date field is the run's clock, not the wall clock
+setChainNow(() => S.clock || Math.floor(Date.now() / 1000));
 (window as any).sim = S; // for the smoke test and the console
 wire();
 updatePlay();

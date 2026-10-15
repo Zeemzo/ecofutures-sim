@@ -19,12 +19,12 @@ const CONTRACTS = [
   ["admin", "EcoFuturesAdmin"], ["countries", "EcoCountries"], ["registry", "EcoRegistry"], ["deeds", "EcoDeeds"],
   ["core", "EcoFuturesCore"], ["bank", "EcoBank"], ["challenge", "EcoChallenge"], ["governance", "EcoFuturesGovernance"],
   ["tree", "Tree"], ["token", "EcoFuturesToken"], ["market", "EcoMarket"], ["parties", "EcoParties"],
-  ["overcharge", "EcoOvercharge"], ["editions", "EcoEditions"], ["lens", "EcoLens"],
+  ["overcharge", "EcoOvercharge"], ["editions", "EcoEditions"], ["lens", "EcoLens"], ["lists", "EcoLists"],
 ];
 const KEY_OF_INTERFACE = {
   IEcoAdmin: "admin", IEcoCountries: "countries", IEcoRegistry: "registry", IEcoDeeds: "deeds", IEcoCore: "core",
   IEcoBank: "bank", IEcoChallenge: "challenge", IEcoGovernance: "governance", ITree: "tree", IEcoTree: "tree",
-  IEcoToken: "token", IEcoMarket: "market", IEcoParties: "parties", IEcoOvercharge: "overcharge", IEcoEditions: "editions", IEcoLens: "lens",
+  IEcoToken: "token", IEcoMarket: "market", IEcoParties: "parties", IEcoOvercharge: "overcharge", IEcoEditions: "editions", IEcoLens: "lens", IEcoLists: "lists",
 };
 // Plumbing every contract has: hidden unless asked for.
 const PLUMBING = new Set(["initialize", "sync", "directory", "pause", "unpause", "paused", "upgradeTo", "upgradeToAndCall",
@@ -125,7 +125,7 @@ const contracts = CONTRACTS.map(([key, name]) => {
   const errors = art.abi.filter((i) => i.type === "error").map((e) => ({ name: e.name, sig: sigOf(e) })).sort((a, b) => a.name.localeCompare(b.name));
   const doc = contractDoc(src, name);
   const size = (art.deployedBytecode?.object?.length ?? 2) / 2 - 1;
-  return { key, name, ...doc, size, functions: fns, events, errors, calls: key === "lens" ? [] : callsFrom(key, src) };
+  return { key, name, ...doc, size, functions: fns, events, errors, calls: key === "lens" || key === "lists" ? [] : callsFrom(key, src) };
 });
 
 // the roles, from Roles in EcoTypes.sol with their comments

@@ -77,6 +77,7 @@ export async function deploy(s: Scenario, progress: (msg: string) => void = () =
   }]);
   for (const key of ["countries", "registry", "deeds", "core", "bank", "market", "parties", "challenge", "governance", "tree", "token", "overcharge", "editions"] as Key[]) await call(key, "sync");
   const lens = await make(C.lens, abis.lens, [admin]);
+  const lists = await make(C.lists, abis.lists, [admin, lens]);
 
   progress("Setting the clocks");
   await call("deeds", "setClocks", [{
@@ -105,7 +106,7 @@ export async function deploy(s: Scenario, progress: (msg: string) => void = () =
     ]);
   }
 
-  const dep = { ...d, usdt, forwarder, lens, editionScale: s.contracts.editionScale, deployedAt: 0 } as Deployment;
+  const dep = { ...d, usdt, forwarder, lens, lists, editionScale: s.contracts.editionScale, deployedAt: 0 } as Deployment;
   setDeployment(dep);
   return dep;
 }

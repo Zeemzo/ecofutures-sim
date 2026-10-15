@@ -5,6 +5,7 @@ import { getAddress, isAddress, keccak256, toBytes, type Address } from "viem";
 import surface from "./surface.json";
 import { addr, read, send, type Key, type Decoded } from "./chain";
 import { nameOf, knownActors, dateOf } from "./model";
+import { kindOf, parseTyped, formatValue, hintFor, enumOf, enumNames, preview } from "./units";
 
 export type Param = { name: string; type: string; components?: Param[]; internalType?: string };
 type Fn = {
@@ -20,7 +21,7 @@ const S = surface as unknown as { contracts: Contract[]; roles: { name: string; 
 const LIMIT = 24_576;
 const SHORT: Record<string, string> = {
   admin: "Admin", countries: "Countries", registry: "Registry", deeds: "Deeds", core: "Core", bank: "Bank",
-  challenge: "Challenge", governance: "Governance", tree: "Tree", token: "Token", lens: "Lens",
+  challenge: "Challenge", governance: "Governance", tree: "Tree", token: "Token", lens: "Lens", lists: "Lists",
   market: "Market", parties: "Parties", overcharge: "Overcharge", editions: "Editions",
 };
 
@@ -38,9 +39,16 @@ const typeOf = (p: Param): string => p.type.startsWith("tuple") ? `(${(p.compone
 const structName = (p: Param) => (p.internalType ?? "").replace(/^struct /, "").replace(/^contract /, "").replace(/^enum /, "");
 
 // ---- values in and out ----
+// Every parameter's kind (money, a date, a duration, land, an enum...) comes from units.ts, generated from the contracts'
+// integration kit: the same rules the platform guides give the frontend and backend.
 
-function parseScalar(type: string, raw: string): unknown {
+/** Where a parameter sits: its contract, its function or event, and its path ("name", "struct.field"). */
+export type At = { c: string; fn: string; path?: string };
+const pathOf = (at: At | undefined, name: string) => (at?.path ? `${at.path}.${name}` : name);
+
+function parseScalar(p: Param, raw: string, at?: At): unknown {
   const v = raw.trim();
+  const type = p.type;
   if (type === "bool") return v === "true" || v === "1" || v === "yes";
   if (type === "address") {
     if (isAddress(v)) return getAddress(v);
@@ -49,7 +57,9 @@ function parseScalar(type: string, raw: string): unknown {
     throw new Error(`"${v}" is not an address or a known actor`);
   }
   if (/^u?int/.test(type)) {
-    const m = v.replace(/[_,\s]/g, "").match(/^(-?\d+(?:\.\d+)?)(?:e(\d+)|(ether|usdt|tree))?$/i);
+    const kind = at ? kindOf(at.c, at.fn, pathOf(at, p.name), type) : undefined;
+    if (kind) return BigInt(parseTyped(kind, v));
+    const m = v.replace(/[_,\s]/g, "").match(/^(-?\d+(?:\.\d+)?)(?:e(\d+)|(ether|usdt|tree|tr3))?$/i);
     if (!m) throw new Error(`"${v}" is not a number (try 50, 50e18 or 50 ether)`);
     const [whole, frac = ""] = m[1].split(".");
     const exp = m[3] ? 18 : Number(m[2] ?? 0);
@@ -60,37 +70,93 @@ function parseScalar(type: string, raw: string): unknown {
   return v;
 }
 
-export function parseValue(p: Param, raw: unknown): unknown {
+function zeroOf(p: Param): unknown {
+  if (p.type.endsWith("]")) return [];
+  if (p.type === "tuple") return Object.fromEntries((p.components ?? []).map((c, i) => [c.name || i, zeroOf(c)]));
+  if (p.type === "bool") return false;
+  if (p.type === "address") return "0x0000000000000000000000000000000000000000";
+  if (/^u?int/.test(p.type)) return 0n;
+  if (/^bytes\d+$/.test(p.type)) return "0x" + "00".repeat(Number(p.type.slice(5)));
+  return p.type === "bytes" ? "0x" : "";
+}
+
+/** A typed field's value for the contract. `at` names where the parameter sits, so its unit applies. */
+export function parseValue(p: Param, raw: unknown, at?: At): unknown {
   if (p.type.endsWith("]")) {
     const arr = typeof raw === "string" ? JSON.parse(raw || "[]") : raw;
     const inner = { ...p, type: p.type.slice(0, p.type.lastIndexOf("[")) };
-    return (arr as unknown[]).map((x) => parseValue(inner, x));
+    return (arr as unknown[]).map((x) => parseValue(inner, x, at));
   }
   if (p.type === "tuple") {
     const obj = typeof raw === "string" ? JSON.parse(raw || "{}") : raw;
-    return Object.fromEntries((p.components ?? []).map((c, i) => [c.name || i, parseValue(c, Array.isArray(obj) ? obj[i] : (obj as any)[c.name])]));
+    const inner = at ? { ...at, path: pathOf(at, p.name) } : undefined;
+    // a field left out is zero: in a list's filter, "any"
+    return Object.fromEntries((p.components ?? []).map((c, i) => {
+      const x = Array.isArray(obj) ? obj[i] : (obj as any)?.[c.name];
+      return [c.name || i, x === undefined || x === null || x === "" ? zeroOf(c) : parseValue(c, x, inner)];
+    }));
   }
-  return parseScalar(p.type, String(raw));
+  return parseScalar(p, String(raw), at);
 }
 
-function show(v: unknown): string {
-  const fmt = (x: unknown): unknown => {
-    if (typeof x === "bigint") return x >= 10n ** 15n ? `${x} (≈ ${(Number(x / 10n ** 12n) / 1e6).toLocaleString("en-US")} × 10¹⁸)` : x.toString();
+/** A returned value or event argument for people: each in its unit, addresses with their names. */
+export function showValue(v: unknown, params: Param[] | undefined, at: At, prefix: string): unknown {
+  const one = (x: unknown, p: Param | undefined, path: string): unknown => {
+    if (p && p.type.startsWith("tuple")) {
+      const inner = (y: unknown) => (y && typeof y === "object" ? Object.fromEntries((p.components ?? []).map((c, i) => [c.name || i, one(Array.isArray(y) ? y[i] : (y as any)[c.name], c, `${path}.${c.name}`)])) : y);
+      return p.type.endsWith("]") && Array.isArray(x) ? x.map(inner) : inner(x);
+    }
+    if (Array.isArray(x)) return x.map((y) => one(y, p ? { ...p, type: p.type.replace(/\[\d*\]$/, "") } : undefined, path));
+    const kind = p ? kindOf(at.c, at.fn, path.replace(/^\./, ""), p.type) : undefined;
+    if (kind && (typeof x === "bigint" || typeof x === "number")) return formatValue(kind, x);
+    if (typeof x === "bigint") return x.toString();
     if (typeof x === "string" && isAddress(x)) { const n = nameOf(x); return n.startsWith("0x") ? x : `${x} (${n})`; }
-    if (Array.isArray(x)) return x.map(fmt);
-    if (x && typeof x === "object") return Object.fromEntries(Object.entries(x).map(([k, y]) => [k, fmt(y)]));
     return x;
   };
-  return JSON.stringify(fmt(v), null, 2);
+  if (!params || params.length === 0) return one(v, undefined, prefix);
+  if (params.length === 1) return one(v, params[0], `${prefix}${params[0].name}`);
+  const arr = Array.isArray(v) ? v : params.map((p) => (v as any)?.[p.name]);
+  return Object.fromEntries(params.map((p, i) => [p.name || i, one(arr[i], p, `${prefix}${p.name}`)]));
 }
 
-export function placeholder(p: Param): string {
+function show(v: unknown, outputs: Param[], at: At): string {
+  const out = showValue(v, outputs, at, "returns.");
+  return typeof out === "string" ? out : JSON.stringify(out, null, 2);
+}
+
+export function placeholder(p: Param, at?: At): string {
   if (p.type.endsWith("]")) return "a JSON list, e.g. [1, 2]";
-  if (p.type === "tuple") return `JSON: {${(p.components ?? []).map((c) => `"${c.name}": …`).join(", ")}}`;
+  if (p.type === "tuple") return `JSON: {${(p.components ?? []).map((c) => `"${c.name}": …`).join(", ")}} (a field left out is 0, "any" in a filter; enums by name)`;
   if (p.type === "address") return "0x… or an actor's name";
-  if (/^u?int/.test(p.type)) return "a number: 50, 50e18 or 50 ether";
+  const hint = at ? hintFor(kindOf(at.c, at.fn, pathOf(at, p.name), p.type)) : undefined;
+  if (hint) return hint;
+  if (/^u?int/.test(p.type)) return "a number";
   if (p.type === "bytes32") return "0x… or a phrase (its hash is used)";
   return p.type;
+}
+
+/** One input field: a dropdown for an enum, else a text box with its unit's hint and a live preview. */
+export function fieldHtml(p: Param, i: number, attr: string, at: At, value = ""): string {
+  const kind = /^u?int/.test(p.type) && !p.type.endsWith("]") ? kindOf(at.c, at.fn, p.name, p.type) : undefined;
+  const en = enumOf(kind);
+  if (p.type === "bool") return `<select ${attr}="${i}"><option ${value === "false" ? "selected" : ""}>false</option><option ${value === "true" ? "selected" : ""}>true</option></select>`;
+  if (en) return `<select ${attr}="${i}">${enumNames(en).map(([n, x]) => `<option value="${x}" ${String(x) === value ? "selected" : ""}>${esc(n)} (${x})</option>`).join("")}</select>`;
+  if (p.type.endsWith("]") || p.type === "tuple") return `<textarea ${attr}="${i}" rows="2" placeholder="${esc(placeholder(p, at))}">${esc(value)}</textarea>`;
+  const pv = kind ? preview(kind, value) : "";
+  const input = `<input ${attr}="${i}" type="text" value="${esc(value)}" placeholder="${esc(placeholder(p, at))}" ${p.type === "address" ? `list="actors"` : ""} ${kind ? `data-kind="${esc(kind)}"` : ""}>`;
+  // the field and what it will send, stacked in the form's second column
+  return kind ? `<span class="field">${input}<small class="preview" aria-live="polite">${esc(pv)}</small></span>` : input;
+}
+
+/** Keep a field's preview in step with what is typed. */
+export function wirePreviews(root: HTMLElement) {
+  root.addEventListener("input", (e) => {
+    const t = e.target as HTMLInputElement;
+    const kind = t.dataset?.kind;
+    if (!kind) return;
+    const pv = t.nextElementSibling;
+    if (pv && pv.classList.contains("preview")) pv.textContent = preview(kind, t.value);
+  });
 }
 
 // ---- the view ----
@@ -107,7 +173,7 @@ export function mountExplorer(root: HTMLElement, hooks: ExplorerHooks) {
   function graph(): string {
     const W = 1000, H = 480, cx = W / 2, cy = H / 2, rx = 400, ry = 190;
     // every contract the surface lists, V12's order first; one this list does not know joins at the end
-    const known: Key[] = ["admin", "countries", "registry", "deeds", "parties", "core", "bank", "market", "challenge", "governance", "tree", "editions", "token", "overcharge", "lens"];
+    const known: Key[] = ["admin", "countries", "registry", "deeds", "parties", "core", "bank", "market", "challenge", "governance", "tree", "editions", "token", "overcharge", "lens", "lists"];
     const order: Key[] = [...known.filter((k) => S.contracts.some((c) => c.key === k)), ...S.contracts.map((c) => c.key).filter((k) => !known.includes(k))];
     const pos = new Map(order.map((k, i) => {
       const a = (i / order.length) * Math.PI * 2 - Math.PI / 2;
@@ -145,11 +211,7 @@ export function mountExplorer(root: HTMLElement, hooks: ExplorerHooks) {
     const params = f.inputs.map((p, i) => {
       const nm = p.name || `arg${i}`;
       const doc = f.params[p.name] ?? "";
-      const field = p.type === "bool"
-        ? `<select data-arg="${i}"><option>false</option><option>true</option></select>`
-        : p.type.endsWith("]") || p.type === "tuple"
-          ? `<textarea data-arg="${i}" rows="2" placeholder="${esc(placeholder(p))}"></textarea>`
-          : `<input data-arg="${i}" type="text" placeholder="${esc(placeholder(p))}" ${p.type === "address" ? `list="actors"` : ""}>`;
+      const field = fieldHtml(p, i, "data-arg", { c: c.key, fn: f.name });
       return `<label class="arg"><span><b>${esc(nm)}</b> <code>${esc(typeOf(p))}</code>${structName(p) && p.type.startsWith("tuple") ? ` <small>${esc(structName(p))}</small>` : ""}${doc ? `<small>${esc(doc)}</small>` : ""}</span>${field}</label>`;
     }).join("");
     const outs = f.outputs.length ? `<p class="small muted">Returns ${f.outputs.map((o) => `<code>${esc(typeOf(o))}${o.name ? " " + esc(o.name) : ""}</code>`).join(", ")}</p>` : "";
@@ -166,7 +228,12 @@ export function mountExplorer(root: HTMLElement, hooks: ExplorerHooks) {
   function eventCard(c: Contract, e: Ev): string {
     const seen = hooks.events().filter((x) => x.contract === c.key && x.name === e.name);
     const last = seen.slice(-6).reverse();
-    const rows = last.map((x) => `<tr><td class="mono">${x.block}</td><td>${esc(Object.entries(x.args).map(([k, v]) => `${k}: ${typeof v === "bigint" ? v.toString() : typeof v === "string" && isAddress(v) ? nameOf(v) : typeof v === "object" ? JSON.stringify(v, (_, y) => typeof y === "bigint" ? y.toString() : y) : String(v)}`).join(" · "))}</td></tr>`).join("");
+    const at = { c: c.key, fn: e.name };
+    const rows = last.map((x) => `<tr><td class="mono">${x.block}</td><td>${esc(Object.entries(x.args).map(([k, v]) => {
+      const p = e.inputs.find((q) => q.name === k);
+      const shown = showValue(v, p ? [p] : undefined, at, "");
+      return `${k}: ${typeof shown === "string" ? shown : JSON.stringify(shown)}`;
+    }).join(" · "))}</td></tr>`).join("");
     return `<details class="fn"><summary><code class="nm">${esc(e.name)}</code><span class="acc">${seen.length.toLocaleString("en-US")} in this run</span><span class="mut e">event</span></summary>
       <div class="fn-body"><code class="sig">${esc(e.sig)}</code>${e.notice ? `<p>${esc(e.notice)}</p>` : ""}
       <p class="small muted">${e.inputs.map((p) => `<code>${esc(typeOf(p))} ${esc(p.name)}</code>${p.indexed ? " <small>indexed</small>" : ""}`).join(", ")}</p>
@@ -254,14 +321,14 @@ export function mountExplorer(root: HTMLElement, hooks: ExplorerHooks) {
     const f = c.functions.find((x) => x.sig === form.dataset.sig)!;
     let args: unknown[];
     try {
-      args = f.inputs.map((p, i) => parseValue(p, (form.querySelector<HTMLInputElement>(`[data-arg="${i}"]`)!).value));
+      args = f.inputs.map((p, i) => parseValue(p, (form.querySelector<HTMLInputElement>(`[data-arg="${i}"]`)!).value, { c: c.key, fn: f.name }));
     } catch (err) {
       out.textContent = `Not sent: ${(err as Error).message}`;
       return;
     }
     if (f.read) {
       out.textContent = "Reading…";
-      read(c.key, f.name, args).then((v) => { out.textContent = show(v); }, (err) => { out.textContent = `Reverted: ${(err as Error).message?.split("\n")[0]}`; });
+      read(c.key, f.name, args).then((v) => { out.textContent = show(v, f.outputs, { c: c.key, fn: f.name }); }, (err) => { out.textContent = `Reverted: ${(err as Error).message?.split("\n")[0]}`; });
       return;
     }
     const from = (form.querySelector<HTMLSelectElement>("[data-from]")!).value as Address;
@@ -273,6 +340,7 @@ export function mountExplorer(root: HTMLElement, hooks: ExplorerHooks) {
     });
   });
 
+  wirePreviews(root);
   render();
   return { refresh: () => { if (!root.closest("[hidden]")) { const open = [...root.querySelectorAll<HTMLDetailsElement>("details[open]")].map((d) => d.id); const y = root.querySelector("#exDetail")?.scrollTop; render(); for (const id of open) { const d = root.querySelector<HTMLDetailsElement>(`#${CSS.escape(id)}`); if (d) d.open = true; } void y; } } };
 }

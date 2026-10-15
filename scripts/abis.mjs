@@ -17,7 +17,7 @@ const out = join(v11, "out");
 const names = {
   admin: "EcoFuturesAdmin", countries: "EcoCountries", registry: "EcoRegistry", deeds: "EcoDeeds",
   core: "EcoFuturesCore", bank: "EcoBank", market: "EcoMarket", parties: "EcoParties", challenge: "EcoChallenge",
-  governance: "EcoFuturesGovernance", tree: "Tree", token: "EcoFuturesToken", overcharge: "EcoOvercharge", editions: "EcoEditions", lens: "EcoLens",
+  governance: "EcoFuturesGovernance", tree: "Tree", token: "EcoFuturesToken", overcharge: "EcoOvercharge", editions: "EcoEditions", lens: "EcoLens", lists: "EcoLists",
 };
 const abis = {};
 for (const [key, name] of Object.entries(names)) {
@@ -26,6 +26,17 @@ for (const [key, name] of Object.entries(names)) {
 abis.usdt = JSON.parse(readFileSync(join(out, "LocalUSDT.sol", "LocalUSDT.json"), "utf8")).abi;
 writeFileSync(join(here, "..", "src", "abi.json"), JSON.stringify(abis));
 console.log(`abi.json: ${Object.keys(abis).length} contracts`);
+
+// What every parameter is (money, a date, a duration, land, an enum...), from the contracts' integration kit: the same
+// file the platform guides give the frontend and backend, so the simulator reads and shows values as they will.
+const kit = join(v11, "docs", "integration");
+if (existsSync(join(kit, "fields.json"))) {
+  const fields = JSON.parse(readFileSync(join(kit, "fields.json"), "utf8"));
+  const enums = JSON.parse(readFileSync(join(kit, "enums.json"), "utf8"));
+  const byKey = Object.fromEntries(Object.entries(names).map(([key, name]) => [key, fields[name] ?? {}]));
+  writeFileSync(join(here, "..", "src", "units.json"), JSON.stringify({ fields: byKey, enums }));
+  console.log(`units.json: ${Object.keys(byKey).length} contracts, ${Object.keys(enums).length} enums`);
+} else console.log("units.json: no integration kit in the contracts (run tools/gen_integration.py there); using the committed copy");
 
 // Creation bytecode, so the app can deploy the protocol itself with any configuration.
 const code = {};

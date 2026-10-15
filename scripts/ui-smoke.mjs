@@ -12,6 +12,9 @@ import { writeFileSync, mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import puppeteer from "puppeteer-core";
+import { readFileSync as readSurface } from "node:fs";
+// every contract the surface lists is drawn on the Contracts tab (fifteen, and EcoLists from 15 Oct)
+const SURFACE_COUNT = JSON.parse(readSurface(new URL("../src/surface.json", import.meta.url), "utf8")).contracts.length;
 
 const CHROME = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const PAGE_PORT = 4317;
@@ -127,7 +130,7 @@ async function attempt(label, prepare, port, phone = false) {
       const shown = await page.$eval(".ex-head .eyebrow", (e) => e.textContent ?? "").catch(() => "");
       const wide = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
       const covered = await page.evaluate(() => { const s = document.querySelector(".ex-side"); return !!s && getComputedStyle(s).position === "sticky" && window.innerWidth <= 1000; });
-      const contracts = nodes === 15 && /Market/i.test(shown) && !wide && !covered;
+      const contracts = nodes === SURFACE_COUNT && /Market/i.test(shown) && !wide && !covered;
       await page.click('[data-view="sim"]');
       result = { ok: played && travelled && quiet && contracts && !/BROKEN/.test(drawer), note: `played ${day(d0)} → ${day(d1)}, +1 yr → ${day(d2)}${over ? " (the programme is over)" : ""}; ${acts} transactions, ${anoms}; drawer ${drawer}; Contracts tab ${contracts ? "ok" : `BROKEN (${nodes} contracts drawn, showing "${shown}")`}` };
       void year;

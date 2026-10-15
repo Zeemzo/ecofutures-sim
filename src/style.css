@@ -369,6 +369,8 @@ button.ghost, label.ghost { background: transparent; border: 1px solid var(--lin
 .arg code { font: 11.5px var(--mono); color: var(--muted); }
 .arg small { color: var(--muted); font-size: 12px; }
 .arg input, .arg select, .arg textarea { width: 100%; font: 12.5px var(--mono); }
+.arg .field { display: grid; gap: 3px; min-width: 0; }
+.arg .preview { font: 11.5px var(--mono); color: var(--accent, var(--muted)); min-height: 1em; overflow-wrap: anywhere; }
 .out { margin: 0; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; font: 12px/1.5 var(--mono); max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
 .errs-list { columns: 3 220px; margin: 10px 0 0; padding-left: 18px; font-size: 12.5px; }
 

@@ -38,7 +38,7 @@ await deploy(sc, (m) => console.log(`  ${m}`));
 if (process.env.DEPLOYMENT_OUT) {
   const names: Record<string, string> = { admin: "EcoFuturesAdmin", countries: "EcoCountries", registry: "EcoRegistry", deeds: "EcoDeeds",
     editions: "EcoEditions", core: "EcoFuturesCore", market: "EcoMarket", bank: "EcoBank", challenge: "EcoChallenge", parties: "EcoParties",
-    governance: "EcoFuturesGovernance", tree: "Tree", token: "EcoFuturesToken", overcharge: "EcoOvercharge", lens: "EcoLens",
+    governance: "EcoFuturesGovernance", tree: "Tree", token: "EcoFuturesToken", overcharge: "EcoOvercharge", lens: "EcoLens", lists: "EcoLists",
     forwarder: "EcoForwarder", usdt: "FreeToken" };
   const out = { network: "anvil (ecofutures-sim)", chainId: 31337, scenario: sc.id, deployedAt: (await latestBlock()).timestamp,
     contracts: Object.fromEntries(Object.entries(names).filter(([k]) => (addr as any)[k]).map(([k, n]) => [n, (addr as any)[k]])) };
