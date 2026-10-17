@@ -1136,8 +1136,8 @@ export class Engine {
       : read<T>(c, fn, [tid]));
     const [c, acct, w, seat, overdue, undecided, due, halted, reverifyBy, restoreBy] = await Promise.all([
       r("core", "getCovenant"), r("bank", "getAccount"), r("challenge", "getWindow"), r("parties", "getSeat"),
-      r<boolean>("core", "isVerificationOverdue"), r<boolean>("challenge", "hasUndecidedChallenge"),
-      r("core", "nextVerificationDue"), r<boolean>("challenge", "releasesHalted"), r("core", "reverifyBy"), r("core", "restoreBy"),
+      r<boolean>("parties", "isVerificationOverdue"), r<boolean>("challenge", "hasUndecidedChallenge"),
+      r("parties", "nextVerificationDue"), r<boolean>("challenge", "releasesHalted"), r("core", "reverifyBy"), r("core", "restoreBy"),
     ]);
     return { c, acct, w, seat, overdue, undecided, due: N(due), halted, reverifyBy: N(reverifyBy), restoreBy: N(restoreBy) };
   }
