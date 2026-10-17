@@ -80,6 +80,7 @@ const FORMATS: Record<string, Fmt> = {
   // ---- the market and the bank ----
   "market.AuctionListed": (a, r) => ["lifecycle", `${nameOf(a.seller)} lists ${r} for auction from ${usd(a.startPrice)}, ending ${dateOf(n(a.endsAt))}.`],
   "market.BidPlaced": (a, r) => ["money", `${nameOf(a.bidder)} bids ${usd(a.amount)} on ${r}.`, true],
+  "market.BidRefunded": (a, r) => ["money", `${nameOf(a.bidder)} is outbid on ${r} and refunded ${usd(a.amount)}.`],
   "market.AuctionSettled": (a, r) => a.price === 0n ? ["lifecycle", `${r}'s auction ends with no bid.`]
     : a.kycPending ? ["money", `${nameOf(a.buyer)} wins ${r} for ${usd(a.price)}; the sale waits for its identity check.`] : null,
   "market.SaleCompleted": (a, r) => ["money", a.active ? `${nameOf(a.buyer)} buys ${r} for ${usd(a.price)}.`

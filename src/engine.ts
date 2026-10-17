@@ -378,6 +378,8 @@ export class Engine {
     await this.act(g, "usdt", "mint", [g, funds], "guardian funds");
     await this.act(g, "usdt", "approve", [addr.registry, maxUint256], "guardian approve");
     await this.act(g, "admin", "acceptAgreement", [Agreement.GRANTOR, h("grantor agreement v1")], "grantor agreement");
+    // the request terms, accepted before the sign-up (FM v29 step 1)
+    await this.act(g, "admin", "acceptAgreement", [Agreement.REQUEST_TERMS, h("request terms v1")], "request terms");
     return g;
   }
 
@@ -850,7 +852,7 @@ export class Engine {
       this.nextAt.set(rid, t + DAY);
       return;
     }
-    const [, deadline] = await read<[boolean, bigint]>("registry", "listingInfo", [tid]);
+    const [, deadline] = await read<[boolean, bigint]>("lens", "listingInfo", [tid]);
     const listed = this.listings.get(rid) ?? 0;
     const length = Math.max(this.sc.contracts.minAuctionDays, 7) * DAY;
     if (t + length > N(deadline) || listed >= 3) { this.nextAt.set(rid, closeAt + 1); return; }

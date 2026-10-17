@@ -144,7 +144,7 @@ export const FLOWS: FlowDef[] = [
   { id: 2, name: "Path A", steps: [Step.DEED, Step.ATTEST, Step.MINT, Step.SALE] },
   // path B as Ravi corrected it on 9 Oct: the Holder's power, the agreement to grant attested before the mint, the
   // Deed recorded after the sale and attested
-  { id: 3, name: "Path B: escrow until recorded", steps: [Step.POWER, Step.POWER_ANCHOR, Step.AGREEMENT, Step.ATTEST, Step.MINT, Step.SALE, Step.RECORDING, Step.ATTEST] },
+  { id: 3, name: "Path B: escrow until recorded", steps: [Step.AGREEMENT, Step.MINT, Step.SALE, Step.RECORDING, Step.ATTEST] },
 ];
 
 export const PRODUCTION: ContractConfig = {
@@ -205,7 +205,8 @@ export function validateFlow(steps: number[]): string[] {
     } else if (st === Step.ATTEST) {
       if (prev !== Step.AGREEMENT && prev !== Step.DEED && prev !== Step.RECORDING) e.push(`Attestation ${i + 1} attests nothing: it must follow an agreement, a deed or a recording.`);
     } else if (st === Step.AGREEMENT || st === Step.DEED || st === Step.RECORDING) {
-      if (next !== Step.ATTEST) e.push(`${name(st)[0].toUpperCase()}${name(st).slice(1)} (step ${i + 1}) must be followed at once by an attestation.`);
+      // flow B's agreement to grant is recorded, not attested: it may go straight to the mint (FM v29)
+      if (next !== Step.ATTEST && !(st === Step.AGREEMENT && next === Step.MINT)) e.push(`${name(st)[0].toUpperCase()}${name(st).slice(1)} (step ${i + 1}) must be followed at once by an attestation${st === Step.AGREEMENT ? " or the mint" : ""}.`);
       if (power >= 0 && !anchored) e.push("The power must be registered before any document.");
       if (st === Step.AGREEMENT && !beforeMint) e.push("An agreement must come before the mint.");
       if (st === Step.RECORDING && beforeMint) e.push("A recording comes after the sale; before the mint, use a deed.");

@@ -28,7 +28,7 @@ export const Option = { NONE: 0, W1A: 1, W1B: 2, T3A: 3, T3B: 4, T3C: 5, T3D: 6,
 export const OptionName = ["", "1A: the score", "1B: the documents", "3A: the Deed off the register", "3B: the score, or a missed breach",
   "3C: natural damage", "3D: the landowner's breach", "3E: a wrong block"];
 /** Why instalments are held (Bank Account.holds bits). */
-export const Holds = { BREACH: 1, VACANCY: 2, DEED: 4, HALT: 8, ACCESSION: 16, COUNCIL: 32 } as const;
+export const Holds = { BREACH: 1, VACANCY: 2, DEED: 4, HALT: 8, ACCESSION: 16, COUNCIL: 32, PARTITION: 64 } as const;
 export const Payee = ["attestor", "panel", "challenger", "guardian"];
 export const Action = {
   NONE: 0, ADD_GTA: 1, REMOVE_GTA: 2, ADMIT_HOLDER: 3, FREEZE_HOLDER: 4, UNFREEZE_HOLDER: 5, RATIFY_FREEZE: 6,
@@ -43,6 +43,7 @@ export const ActionName = Object.fromEntries(Object.entries(Action).map(([k, v])
 export const Agreement = {
   GRANTOR: keccak256(toBytes("GRANTOR_AGREEMENT")), PATRON: keccak256(toBytes("PATRON_SUBSCRIPTION")),
   HOLDER: keccak256(toBytes("HOLDER_AGREEMENT")), ENGAGEMENT: keccak256(toBytes("ENGAGEMENT_AGREEMENT")),
+  REQUEST_TERMS: keccak256(toBytes("REQUEST_TERMS")),
 };
 
 /** What a challenge will come to, as the simulation plans it. */

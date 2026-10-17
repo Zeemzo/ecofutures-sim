@@ -11,8 +11,9 @@ export const MONEY = [
   "Pool: challengers", "Pool: swept to guardians", "Sale refunds", "Paid to patrons", "Resale volume",
   "TR3: patrons", "TR3: guardians", "TR3: referrers", "Trust Admin share withheld",
   "Withheld shares paid out", "Held instalments at the End Date", "Allowance drawn by Holders",
+  "Bids paid into escrow", "Outbid bids refunded", "Enforcement costs set off", "Refused refunds collected",
 ] as const;
-export const OUTFLOWS = [1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 22, 23, 24];
+export const OUTFLOWS = [1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 22, 23, 24, 26, 27, 28];
 
 export class Ledger {
   money: bigint[] = MONEY.map(() => 0n);
@@ -27,6 +28,8 @@ export class Ledger {
   earned = new Map<string, bigint>();
   /** Instalments released in a transaction, by token: an AccountClosed after them repeats them. */
   private releasedIn = new Set<string>();
+  /** Each live auction's top bid, held in the Market's escrow (decided 17 Oct). */
+  private topBid = new Map<bigint, { bidder: string; amount: bigint }>();
 
   private add(i: number, v: bigint) { this.money[i] += v; }
   private credit(a: Address | undefined, v: bigint) {
@@ -70,6 +73,7 @@ export class Ledger {
         break;
       }
       case "market.AuctionSettled":
+        this.topBid.delete(a.tokenId);
         this.add(5, a.price);
         if (a.price !== 0n) this.price.set(rid(), a.price);
         break;
@@ -105,10 +109,22 @@ export class Ledger {
         break;
       }
       case "token.Sold": this.add(17, a.price); break;
+      // the top bid is paid in when made (only the difference when its bidder raises it); the bid it overtakes is
+      // refunded; the settlement takes the escrowed price, so a sale price is no new money
+      case "market.BidPlaced": {
+        const prev = this.topBid.get(a.tokenId), bidder = getAddress(a.bidder);
+        this.add(25, prev && prev.bidder === bidder ? a.amount - prev.amount : a.amount);
+        this.topBid.set(a.tokenId, { bidder, amount: a.amount });
+        break;
+      }
+      case "market.BidRefunded": this.add(26, a.amount); break;
+      case "market.AuctionCancelled": this.topBid.delete(a.tokenId); break;
+      case "bank.SetOffPaid": this.add(27, a.amount); this.credit(a.holder, a.amount); break;
+      case "market.RefundClaimed": this.add(28, a.amount); break;
     }
   }
 
-  inflow() { return this.money[0] + this.money[5]; }
+  inflow() { return this.money[0] + this.money[25]; }
   outflow() { return OUTFLOWS.reduce((s, i) => s + this.money[i], 0n); }
 }
 
@@ -197,7 +213,8 @@ async function readOne(rid: number, done: boolean, at: (c: any, fn: string, args
   ]);
   part.token = true;
   part.bank = a.balance;
-  part.market = settlement ? settlement.price : 0n;
+  // the Market holds a settling sale's price, and a live auction's escrowed top bid
+  part.market = (settlement ? settlement.price : 0n) + (auction ? (await at("market", "getAuction", [tid])).highestBid : 0n);
   part.pool = pool;
   // the End Date releases what is left, verified or not (closeTerm after the grace): only an ended term may be ahead
   const ended = Number(c.status) === CovenantStatus.ENDED;
