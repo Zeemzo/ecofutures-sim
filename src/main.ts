@@ -310,6 +310,8 @@ async function ingest(t: number) {
   for (const e of logs) {
     // a request made from the screen joins the run: the simulated actors take it on
     if (e.contract === "registry" && e.name === "VerificationRequested") S.engine.adopt(Number(e.args.requestId), Number(e.args.country));
+    // the mint names the URI the verifier filed, whoever filed it
+    if (e.contract === "registry" && e.name === "VerificationSubmitted") S.engine.filed(Number(e.args.requestId), String(e.args.metadataURI));
     S.raw.push(e);
     S.ledger.ingest(e);
     const entry = describe(e, S.ledger, S.seq++, t);

@@ -324,6 +324,8 @@ export class Engine {
     this.holders[key] = a;
     await fund(a);
     await this.identify(a);
+    // the Holder signs the Holder Agreement before the Council admits it (FM 0c)
+    await this.act(a, "admin", "acceptAgreement", [Agreement.HOLDER, h("holder agreement v1")], "holder agreement");
     if (await this.vote(Action.ADMIT_HOLDER, ["address", "uint16", "uint256", "string"], [a, c.code, BigInt(org), "ipfs://holder-agreement"], `admit ${name}`)) {
       if (!this.countryHolders.has(c.code)) this.countryHolders.set(c.code, []);
       this.countryHolders.get(c.code)!.push(a);
@@ -335,6 +337,8 @@ export class Engine {
     const v = register(labelAddress(`verifier.${name}`), name, "verifier");
     await fund(v);
     await this.identify(v);
+    // the verifier signs the Engagement Agreement on joining (FM 0d)
+    await this.act(v, "admin", "acceptAgreement", [Agreement.ENGAGEMENT, h("engagement agreement v1")], "engagement agreement");
     if (!(await this.act(inviter, "admin", "addVerifier", [v, BigInt(org), inviter, "ipfs://org", "ipfs://accreditation"], `add ${name}`))) return null;
     const c = N(await this.q("admin", "verifierCountry", [v]));
     if (!this.countryVerifiers.has(c)) this.countryVerifiers.set(c, []);
@@ -659,7 +663,11 @@ export class Engine {
     await this.flow(rid, r, t);
   }
 
-  metadataOf(rid: number) { return `ipfs://eft/${rid}`; }
+  /** The URIs verifiers actually filed, from VerificationSubmitted: a verification made from the screen may file any. */
+  private filedMetadata = new Map<number, string>();
+  filed(rid: number, metadataURI: string) { this.filedMetadata.set(rid, metadataURI); }
+  /** The EFT's metadata URI: the mint must name exactly the one the verifier filed (Registry.mint). */
+  metadataOf(rid: number) { return this.filedMetadata.get(rid) ?? `ipfs://eft/${rid}`; }
 
   async holderCan(holder: Address): Promise<boolean> {
     const [active, frozen] = await Promise.all([this.q<boolean>("admin", "isActiveHolder", [holder]), this.q<boolean>("admin", "isFrozen", [holder])]);
@@ -735,7 +743,9 @@ export class Engine {
         }
       }
       if ((this.stepPlan.get(rid) ?? 0) > t) { this.nextAt.set(rid, this.stepPlan.get(rid)!); return; }
-      const by = this.rand(2) === 0 || !holderCan ? r.verifier : holder;
+      // the verifier anchors the Deed; the land's Holder too from day 7 (FM p12)
+      const holderFrom = N(s.stepAt) + k.guardianAnchorFromDays * DAY + 60;
+      const by = this.rand(2) === 0 || !holderCan || (step === Step.DEED && t < holderFrom) ? r.verifier : holder;
       await this.act(by, "deeds", "recordDocument", [BigInt(rid), h(step === Step.AGREEMENT ? "agreement" : "deed", rid, N(s.cursor)), BigInt(t), `${this.shortOf(N(r.country))}-REG`], "recordDocument", rid);
     } else if (step === Step.RECORDING) {
       const saleAt = N(r.saleAt), post = N(r.postSaleWindow);
@@ -760,6 +770,8 @@ export class Engine {
       if (a === zeroAddress) { this.nextAt.set(rid, N(doc.recordedAt) + this.sc.contracts.gtaAttestFromDays * DAY + 1); return; }
       await this.act(a, "deeds", "attest", [BigInt(rid), doc.docHash, h("certified copy", rid, N(s.cursor)), `${this.shortOf(N(r.country))}-REG`], "attest", rid);
     } else if (step === Step.MINT) {
+      // a frozen Holder takes no new covenant (FM P5): the mint waits for the unfreeze, a successor or the Council
+      if (await this.q<boolean>("admin", "isFrozen", [holder])) { this.nextAt.set(rid, t + DAY); return; }
       // a reservation outlives its edition's close (V12.1, rule 9): it is minted and sold as any other
       await this.act(r.guardian, "registry", "mint", [BigInt(rid), this.metadataOf(rid)], "mint", rid);
     } else if (step === Step.SALE) {
@@ -897,7 +909,9 @@ export class Engine {
           const a = await this.pickWindowAttester(N(c.country), c.verifier, c.guardian, openedAt);
           if (a !== zeroAddress) await this.act(a, "challenge", "attestVerification", [tid, h("certified copy", tid, openedAt), "ipfs://copy"], "attestVerification", rid);
         } else if (!st.undecided) {
-          const option = [Option.T3A, Option.T3B, Option.T3C, Option.T3D][this.pick(this.b.termOptions)];
+          let option: number = [Option.T3A, Option.T3B, Option.T3C, Option.T3D][this.pick(this.b.termOptions)];
+          // from the End Date only the last window's acts are reviewed (3A, 3B); 3C and 3D are closed
+          if (t >= termEnd && (option === Option.T3C || option === Option.T3D)) option = Option.T3B;
           await this.raise(option, tid, rid, c.verifier, c.guardian, N(c.country));
           st.undecided = await read<boolean>("challenge", "hasUndecidedChallenge", [tid]); // one at a time
         }
@@ -996,7 +1010,8 @@ export class Engine {
     }
 
     // ---- the End Date ----
-    if (t >= termEnd && !st.undecided) {
+    // the End Date waits for the last window to run its course, and for a Council freeze or a pending accession
+    if (t >= termEnd && !st.undecided && windowClosed && (N(st.acct.holds) & (Holds.COUNCIL | Holds.ACCESSION)) === 0) {
       const allVerified = N(c.verifiedThrough) >= N(st.acct.totalReleases);
       if (allVerified || t > termEnd + this.grace) {
         if (await this.act(this.patrons[0], "core", "closeTerm", [tid], "closeTerm", rid)) {
@@ -1200,7 +1215,9 @@ export class Engine {
       }
     }
     // the land changes hands (FM P6): the verifier approves, and the buyer accedes to the Grantor Agreement or not
-    if (this.rand(1000) < this.b.landSalePermille && this.now + YEAR < termEnd && !this.landSaleAt.has(tid) && N(st.acct.holds) === 0) {
+    // ...by the sitting verifier, never while a challenge on the covenant is undecided (FM p15)
+    if (this.rand(1000) < this.b.landSalePermille && this.now + YEAR < termEnd && !this.landSaleAt.has(tid) && N(st.acct.holds) === 0
+      && !(await read<boolean>("challenge", "hasUndecidedChallenge", [tid])) && !(await read<boolean>("parties", "seatVacant", [tid]))) {
       const g2 = await this.newGuardian();
       if (await this.act(c.guardian, "parties", "proposeLandSale", [tid, g2, h("transfer deed", tid, this.now)], "proposeLandSale", rid)
         && await this.act(c.verifier, "parties", "approveLandSale", [tid], "approveLandSale", rid)) {
@@ -1607,6 +1624,7 @@ export class Engine {
     const recruit = register(labelAddress(`recruit.${name}`), name, "verifier");
     await fund(recruit);
     await this.identify(recruit);
+    await this.act(recruit, "admin", "acceptAgreement", [Agreement.ENGAGEMENT, h("engagement agreement v1")], "engagement agreement");
     const org = BigInt(3_000_000 + this.recruits); // a new organisation: the Trust Admin invites its first member
     if ((await send(hcur, "admin", "addVerifier", [recruit, org, hcur, "ipfs://org", "ipfs://accreditation"])).ok) {
       this.wrote("admin");

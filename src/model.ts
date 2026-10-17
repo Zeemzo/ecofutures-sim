@@ -42,6 +42,7 @@ export const ActionName = Object.fromEntries(Object.entries(Action).map(([k, v])
 /** The digital agreements (EcoTypes.Agreements), by the kind an account accepts. */
 export const Agreement = {
   GRANTOR: keccak256(toBytes("GRANTOR_AGREEMENT")), PATRON: keccak256(toBytes("PATRON_SUBSCRIPTION")),
+  HOLDER: keccak256(toBytes("HOLDER_AGREEMENT")), ENGAGEMENT: keccak256(toBytes("ENGAGEMENT_AGREEMENT")),
 };
 
 /** What a challenge will come to, as the simulation plans it. */

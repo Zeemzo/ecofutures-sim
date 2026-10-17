@@ -10,6 +10,7 @@ const esc = (s: string) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", 
 const SHORT: Record<string, string> = {
   admin: "Admin", countries: "Countries", registry: "Registry", deeds: "Deeds", core: "Core", bank: "Bank", challenge: "Challenge",
   governance: "Governance", tree: "Tree", token: "Token", lens: "Lens", lists: "Lists", usdt: "USDT",
+  market: "Market", parties: "Parties", overcharge: "Overcharge", editions: "Editions",
 };
 
 export type TakeoverHooks = {
