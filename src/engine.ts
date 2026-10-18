@@ -861,7 +861,16 @@ export class Engine {
             this.patrons.push(getAddress(st.buyer));
           }
         } else if (await this.act(this.server, "market", "cancelStaleSale", [tid], "kyc failed", rid)) {
-          this.note("kyc", rid, `${nameOf(st.buyer)} fails the identity check: the sale of #${rid} is called off, the price refunded, and the EFT goes back to its landowner to relist.`);
+          // the EFT is relisted by itself on the same terms (R, 18 Oct, C4); a patron bids on it at once
+          const relisted = await read<boolean>("market", "hasAuction", [tid]);
+          this.note("kyc", rid, `${nameOf(st.buyer)} fails the identity check: the sale of #${rid} is called off, the price refunded${relisted ? ", and the EFT relisted at once" : ", and the EFT goes back to its landowner"}; that wallet must pass the check before it bids again.`);
+          if (relisted && this.fate.get(rid) !== F.UNSOLD) {
+            const au = await read("market", "getAuction", [tid]);
+            const p = await this.patronFor(tid);
+            const price = BigInt(au.startPrice);
+            await this.topUp(p, price);
+            if (await this.act(p, "market", "bid", [tid, price], "bid", rid)) this.priceOf.set(rid, price);
+          }
         }
         this.kycOutcome.delete(tid);
       }
@@ -1020,7 +1029,7 @@ export class Engine {
         const late = due !== 0 && t - due > this.grace;
         if (await this.act(c.verifier, "core", "verify", [tid, this.rescore(N(c.ecoScore)), 0, ""], "verify", rid)) {
           if (offSchedule) this.note("reverify", rid, `${nameOf(c.verifier)} re-verifies #${rid} off schedule.`);
-          else if (late) this.note("late", rid, `${nameOf(c.verifier)} verifies #${rid} ${Math.round((t - due) / DAY)} days late: those days' TR3 go to the Reserve.`);
+          else if (late) this.note("late", rid, `${nameOf(c.verifier)} verifies #${rid} ${Math.round((t - due) / DAY)} days late: the TR3 waited for it, and is released in full at the score.`);
           if (this.rand(1000) < this.b.blockPermille && t < termEnd) {
             if (await this.act(c.verifier, "core", "blockCovenant", [tid, "breach found on the land"], "block", rid)) {
               this.note("block", rid, `${nameOf(c.verifier)} finds a breach on #${rid} and blocks it: instalments and TR3 pause.`);
@@ -1050,15 +1059,17 @@ export class Engine {
     // ---- the End Date ----
     // the End Date waits for the last window to run its course, and for a Council freeze or a pending accession
     if (t >= termEnd && !st.undecided && windowClosed && (N(st.acct.holds) & (Holds.COUNCIL | Holds.ACCESSION)) === 0) {
+      // the term closes only after its last re-verification, unless the land's own failure blocks it then (C9)
       const allVerified = N(c.verifiedThrough) >= N(st.acct.totalReleases);
-      if (allVerified || t > termEnd + this.grace) {
+      const blocked = N(c.status) === CovenantStatus.BLOCKED;
+      if (allVerified || (blocked && t > termEnd + this.grace)) {
         if (await this.act(this.patrons[0], "core", "closeTerm", [tid], "closeTerm", rid)) {
           this.note("term-ended", rid, `#${rid} reaches its End Date: the last instalment and the last TR3 release.`);
         }
         this.nextAt.set(rid, t + DAY);
         return;
       }
-      next = Math.min(next, termEnd + this.grace + DAY);
+      if (blocked) next = Math.min(next, termEnd + this.grace + DAY);
     }
     this.nextAt.set(rid, Math.max(next, t + 3600));
   }

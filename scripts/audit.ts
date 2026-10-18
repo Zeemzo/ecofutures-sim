@@ -245,7 +245,7 @@ const sweep = check("pool-sweep", "Money", "What a pool still holds after the En
 const evTr = check("events-match-transfers", "Money", "In every transaction, what the payment events say each party received = the USDT the protocol (Registry, Market, Bank, EcoChallenge) actually transferred to it", "Every payment event");
 // TR3
 const trSplit = check("tr3-split", "TR3", "Of everything a covenant has released: the patron's 90% and the landowner's 10% (a referrer taking 30% of it) are what has been claimed plus what is claimable; and the claim events add up to what Tree says was paid", "Tree._due; GUARDIAN_PERCENT, REFERRAL_PERCENT_OF_GUARDIAN");
-const trRef = check("tr3-referrer", "TR3", "A referrer who is a verifier, a Trust Admin or a GTA when the claim is made takes nothing; its share stays with the landowner", "Tree._referrerEligible ('no TR3 to anyone who judges a score')");
+const trRef = check("tr3-referrer", "TR3", "A referrer who is a GTA, or the land's own verifier, when the claim is made takes nothing; its share stays with the landowner. Anyone else is paid", "Tree._referrerEligible (R, 18 Oct, R4: anyone except a Council member or whoever scores that land)");
 const trCap = check("tr3-cap", "TR3", "No allocation is above 1,000,000 TR3, and no covenant's land TR3 (released less boosts) above its allocation", "EcoEditions.MAX_BASE_TR3, sell");
 const rsClaim = check("resale-claims", "Resale", "The patron's TR3 is minted only by a patron claim, to the EFT's owner at that moment, never in a transfer; a guardian claim mints the patron nothing", "R, 14 Oct, Part 1 items 1-3; Tree.claimPatron, claimGuardian");
 const rsOrd = check("resale-orders", "Resale", "Every resale takes a live order at its price: a listing or an offer made at the EFT's order counter in force, an offer before its expiry", "R, 14 Oct, Part 1 items 4 and 6; EcoFuturesToken.buy, acceptOffer");
@@ -262,7 +262,7 @@ const qReject = check("rejection", "Requests", "A rejection is filed by the clai
 const rew = check("tr3-reward", "TR3", "Each covenant's stream starts with its sale's allocation (TR3 at a score of 100), at the covenant's score", "Tree.startReward; TR3 model v6");
 const relScore = check("tr3-release-score", "TR3", "Each release is at the score in force since the last (at the new score when the release lifts a 3B hold), and the score's shortfall goes to the Reserve: released = floor((released + credited) x score / 100)", "Tree._settle, pass; addendum (ECOSCORE source); FM p16 (3B back-paid at the corrected score)");
 const strCons = check("tr3-stream-conservation", "TR3", "Every allocation is accounted exactly: what was released + what was credited to the Reserve (score shortfall, late days, holds, an early end, an acquired part) = the allocation once the stream ends, and never more before", "Tree._settle, _end, endPart; addendum");
-const late = check("late-verification", "TR3", `A re-verification is late only past its due date + the grace (${days(cfg.maxDelay)}): it records when it fell overdue, and the late days' TR3 goes to the Reserve`, "D3; Core.verify; Tree._settle (BLOCKED source)");
+const late = check("late-verification", "TR3", `A re-verification is late only past its due date + the grace (${days(cfg.maxDelay)}): it records when it fell overdue, and nothing of its TR3 is forfeited -- only the score's shortfall goes to the Reserve (R, 18 Oct, C9)`, "D3; Core.verify; Tree._settle");
 const brk = check("tr3-supply-breakdown", "TR3", "Every TR3 of the 210,000,000 is minted, owed, in the Reserve, committed to a boost, streaming, unsold or burned: each part as the events give it, and the unallocated remainder within rounding dust of the space not yet sold", "Tree.supplyBreakdown; EcoEditions.unallocatedTR3; addendum point 6");
 const ovc = check("overcharge", "TR3", "A Relic's cap is the land TR3 its source released (boosts excluded), minted only for a covenant that reached its End Date; transmutation sums two same-edition caps an edition lower; a boost's multiplier is F(target) / F(Relic) and its commit the least of the remaining allocation x (M - 1), the cap and the Reserve; each release pays it x (M - 1) from the commit, and what is left returns at the end", "addendum; EcoOvercharge; Tree.commitBoost, _boost, _end");
 const land = check("land-at-request", "Editions", "Every request's land is at least 100 m2 and fits some edition: at most 100 x F21 hectare-years", "TR3 model v6; EcoEditions.reserve");
@@ -283,7 +283,7 @@ const chEnd = check("challenges-end", "Challenges", "No challenge stays undecide
 const cons = check("challenge-consequences", "Challenges", "Each verdict has exactly its option's consequences, in the same transaction. Dismissed: the challenger is flagged (never the landowner on 3E) and nothing changes. Upheld: W1A reopens the request and bars the verifier; W1B fails it; 3A blocks the covenant (Deed hold) and flags the last attester, forfeiting an unsettled window's fee; 3B vacates the seat (the challenger's first claim) and holds the TR3 for rescoring; 3C sets a re-verification due; 3D blocks for a breach; 3E lifts a breach block. W1A, W1B, 3B and 3E flag the verifier", "FM p15-17; EcoChallenge._decide; Core.applyVerdict; EcoRegistry.onChallengeResolved");
 const sched = check("verification-schedule", "Term", "Each re-verification is by the seated verifier and covers every interval begun since the term started (up to the last); one that covers none is a cure of a breach block, the re-verification 3C called for, or a newly seated verifier's first; none while a challenge on the covenant is undecided, nor before the last review window has closed", "Core.verify; EcoChallenge.openWindow; EcoParties.onVerification");
 const blk = check("block-holds", "Term", "A seated verifier blocks at most twice per review window (partition and 3D blocks aside); a block in the term holds the instalments (breach or Deed), its lift releases them; now, every covenant's holds match its block and its seat", "FM P4, P7; Core.blockCovenant, _block, _unblock; EcoParties._vacate");
-const termEnd = check("term-closed", "Term", "A covenant whose term and grace have long passed has had its End Date accounted: nothing left in its account, every instalment released", "FM p9; Core.closeTerm; EcoBank.closeAccount");
+const termEnd = check("term-closed", "Term", "A term closes only after its last re-verification, unless a breach, Deed or partition block stands then (C9); a covenant whose term and grace have long passed has had its End Date accounted: nothing left in its account, every instalment released", "FM p9; R, 18 Oct, C9; Core.closeTerm; EcoBank.closeAccount");
 const tclk = check("term-clocks", "Term", "3A: a covenant closes early only after its restore window; 3C: the re-verification falls due at the verdict, or at the close of a review window still open (then the usual grace), unless the scheduled one comes within a review window of it; a winner's identity check is called off for time only after the KYC window; a buyer of the land's accession lapses only after the accession window", "FM p4-5, p8, P6; Core.applyVerdict, closeEarly; EcoMarket.cancelStaleSale; EcoParties.lapseAccession");
 const fr = check("emergency-freeze", "Governance", `An emergency freeze lasts ${days(cfg.emergency)}: ratified by the Council by then, lifted by the multisig, or ended after it; never again on the same Trust Admin within ${days(cfg.cooldown)} of its end`, "FM p4, p19; Governance.emergencyFreeze");
 const seat = check("seat-refilled", "Term", "A vacated seat is filled again", "FM P4");
@@ -399,7 +399,8 @@ const orderCounter = new Map<bigint, number>();
 const resaleListings = new Map<bigint, { counter: number; price: bigint }>();
 const resaleOffers = new Map<string, { counter: number; price: bigint; expiry: number }>();
 // the edition model, replayed: the OPEN edition; each edition's 8 years in the year in force when it opened
-const clock = 8 * cfg.year;
+// each edition's clock: 8 years for editions 1-16, then F(n - 10) -- 13, 21, 34, 55, 89 (R, 18 Oct, C10)
+const clockOf = (n: number) => (n > 16 ? Number(fib(n - 10)) : 8) * cfg.year;
 let ed = 1;
 let capBurn = 0n, closesCount = 0, moves = 0, fixes = 0, unfixes = 0, edBurn = 0n;
 let reserveEv = 0n, committedEv = 0n, releasedEv = 0n, burnedEv = 0n, claimedEv = 0n;
@@ -627,9 +628,12 @@ for (const e of events) {
     case "registry.VerifierPaid": {
       const r = reqs.get(N(a.requestId))!, amt = B(a.amount);
       pay(e.tx, a.verifier, amt);
-      upParts.test(L(a.verifier) === r.verifier, `#${r.rid}`, () => `paid ${short(a.verifier)}, the request's verifier is ${short(r.verifier)}`);
+      // an upheld W1B pays the verification fee to its challenger as a bounty (R, 18 Oct, C3)
+      const w1b = inTx(e, "registry.RequestEnded", (x) => N(x.a.requestId) === r.rid && N(x.a.reason) === 3).length > 0;
+      const bountyTo = w1b ? [...chs.values()].filter((x) => x.option === Option.W1B && x.subject === BigInt(r.rid)).pop()?.challenger : undefined;
+      upParts.test(L(a.verifier) === (w1b ? bountyTo : r.verifier), `#${r.rid}`, () => `paid ${short(a.verifier)}, the request's verifier is ${short(r.verifier)}${w1b ? `, the W1B challenger ${short(bountyTo ?? Z)}` : ""}`);
       const rejectedEnd = inTx(e, "registry.RequestEnded", (x) => N(x.a.requestId) === r.rid && N(x.a.reason) === 11).length > 0;
-      if (r.status === RequestStatus.VERIFIED && !r.judgmentSettled && !rejectedEnd) {
+      if (!w1b && r.status === RequestStatus.VERIFIED && !r.judgmentSettled && !rejectedEnd) {
         // the watchdog passed with no judges to pay (entering the flow, abandoning or lapsing): the judgment fee
         upParts.test(amt === r.left.jud, `#${r.rid}`, () => `the judgment fee to the verifier was ${usd(amt)}; ${usd(r.left.jud)} was held`);
         r.judgmentSettled = true; r.left.jud = 0n;
@@ -637,7 +641,7 @@ for (const e of events) {
         // at the first attestation, or (flow B, nothing attested before it) at the mint
         const why = inTx(e, "deeds.DocumentAttested", (x) => N(x.a.requestId) === r.rid).length > 0
           || inTx(e, "registry.CovenantMinted", (x) => N(x.a.requestId) === r.rid).length > 0
-          || inTx(e, "registry.RequestEnded", (x) => N(x.a.requestId) === r.rid && [2, 8, 11].includes(N(x.a.reason))).length > 0;
+          || inTx(e, "registry.RequestEnded", (x) => N(x.a.requestId) === r.rid && [2, 3, 8, 11].includes(N(x.a.reason))).length > 0;
         upParts.test(!r.shareTaken && amt === r.vf && why, `#${r.rid}`, () => `the verification fee paid as ${usd(amt)} of ${usd(r.vf)}${r.shareTaken ? " a second time" : ""}${why ? "" : ", with no attestation, refusal or abandonment"}`);
         r.shareTaken = true; r.left.share = 0n;
       }
@@ -841,7 +845,14 @@ for (const e of events) {
     }
     case "core.CovenantCancelled": cov(a.tokenId)!.status = CovenantStatus.CANCELLED; break;
     case "core.CovenantClosed": cov(a.tokenId)!.status = CovenantStatus.CLOSED; break;
-    case "core.CovenantEnded": cov(a.tokenId)!.status = CovenantStatus.ENDED; break;
+    case "core.CovenantEnded": {
+      // the term closes only after its last re-verification, unless the land's own failure blocks it (R, 18 Oct, C9)
+      const c = cov(a.tokenId)!;
+      termEnd.test(c.through >= c.total || c.status === CovenantStatus.BLOCKED, R(c.tid),
+        () => `closed with ${c.through} of ${c.total} intervals verified, status ${c.status}`);
+      c.status = CovenantStatus.ENDED;
+      break;
+    }
     case "core.CovenantClosedEarly": {
       const c = cov(a.tokenId)!;
       tclk.test(c.restoreBy !== 0 && t > c.restoreBy, R(c.tid), () => `closed early ${date(t)}; the Deed could be restored until ${date(c.restoreBy)}`);
@@ -881,9 +892,10 @@ for (const e of events) {
       const wantOd = lateAt !== 0 && t > lateAt ? lateAt : 0;
       c.reverifyBy = 0; c.barred = 0;
       const st = streams.get(c.tid);
+      // late days are deferred, never forfeited: nothing reaches the Reserve for lateness (source 1 is no longer used)
       const credited = inTx(e, "tree.ReserveCredited", (x) => B(x.a.tokenId) === c.tid && N(x.a.source) === 1).length > 0;
-      late.test(od === wantOd && (od === 0 || od >= Math.min(t, c.termEnd) || !st || st.ended || credited), R(c.tid),
-        () => `overdueSince ${od ? date(od) : "none"}, expected ${wantOd ? date(wantOd) : "none"} (due ${date(due)}, verified ${date(t)})${od && !credited ? "; no late days credited" : ""}`);
+      late.test(od === wantOd && !credited, R(c.tid),
+        () => `overdueSince ${od ? date(od) : "none"}, expected ${wantOd ? date(wantOd) : "none"} (due ${date(due)}, verified ${date(t)})${credited ? "; late days were credited to the Reserve" : ""}`);
       c.through = k; c.verifications++; c.reverifyPending = false; c.newSeatPending = false; c.nominee = Z; // the bound verifier acted: no replacement is due
       c.score = N(a.ecoScore);
       if (st) { st.score = N(a.ecoScore); if (!st.ended) st.rescore = false; }
@@ -1013,14 +1025,18 @@ for (const e of events) {
       // the whole instalment split at the covenant's own split; the consideration within the landowner's part (FM v29)
       const s = trancheSplit(amount, ac.split0.v, ac.split0.tax, ac.split0.f);
       // a Holder's enforcement cost recovered from the consideration (FM v29 P7), paid just before
-      const setOff = inTx(e, "bank.SetOffPaid", (x) => B(x.a.tokenId) === tid && x.ord < e.ord).reduce((v, x) => v + B(x.a.amount), 0n);
-      for (const x of inTx(e, "bank.SetOffPaid", (x) => B(x.a.tokenId) === tid && x.ord < e.ord)) pay(e.tx, x.a.holder, B(x.a.amount));
+      const soEv = inTx(e, "bank.SetOffPaid", (x) => B(x.a.tokenId) === tid && x.ord < e.ord);
+      const setOff = soEv.reduce((v, x) => v + B(x.a.amount), 0n);
+      // a set-off due to a frozen or removed Holder is withheld for it (HolderFeeHeld just before its SetOffPaid), not sent
+      const withheld = (x: any) => inTx(e, "bank.HolderFeeHeld", (y) => B(y.a.tokenId) === tid && y.ord === x.ord - 1 && B(y.a.amount) === B(x.a.amount)).length > 0;
+      for (const x of soEv) if (!withheld(x)) pay(e.tx, x.a.holder, B(x.a.amount));
+      const lastSo = soEv.length ? Math.max(...soEv.map((x) => x.ord)) : -1;
       let owed = consOwed(ac, c, t);
       if (owed > s.g) owed = s.g;
       consC.test(B(p.consideration) + setOff === owed, R(tid), () => `consideration ${usd(B(p.consideration))}, ${usd(owed)} owed (${ac!.consYears} years paid)`);
       { const part = ac.consPart + owed; ac.consYears += N(part / ac.consPer); ac.consPart = part % ac.consPer; }
       ac.consPaid += owed;
-      const heldEv = inTx(e, "bank.HolderFeeHeld", (x) => B(x.a.tokenId) === tid && x.ord < e.ord);
+      const heldEv = inTx(e, "bank.HolderFeeHeld", (x) => B(x.a.tokenId) === tid && x.ord < e.ord && x.ord > lastSo);
       const held = heldEv.reduce((x, y) => x + B(y.a.amount), 0n);
       split4.test(B(p.verifierFee) === s.v && B(p.foundationFee) === s.f && B(p.holderFee) + held === s.h && B(p.guardianAmount) + setOff === s.g
         && B(p.verifierFee) + B(p.foundationFee) + B(p.holderFee) + held + B(p.guardianAmount) + setOff === amount && L(p.verifier) === c.verifier && L(p.guardian) === c.guardian, R(tid),
@@ -1261,13 +1277,13 @@ for (const e of events) {
 
     // ---- TR3 ----
     case "editions.EditionOpened": {
-      const n = N(a.edition), at = N(a.at), ck = N(a.clock) || clock;
+      const n = N(a.edition), at = N(a.at), ck = N(a.clock) || clockOf(n);
       let why = "";
       if (nextOpen) {
         if (n !== nextOpen.n) why = `edition ${n} opened; the next to open was ${nextOpen.n}`;
         else if (at !== nextOpen.at) why = `opened at ${date(at)}, not ${date(nextOpen.at)}`;
       } else if (n !== 1) why = `edition ${n} opened with no edition settling or closing`;
-      if (!why && ck !== clock) why = `its clock is ${days(ck)}, not 8 years of ${days(cfg.year)}`;
+      if (!why && ck !== clockOf(n)) why = `its clock is ${days(ck)}, not ${days(clockOf(n))}`;
       cls.test(why === "", `edition ${n}`, () => why);
       edOpened[n] = at; edClock[n] = ck; ed = n; nextOpen = null;
       break;
@@ -1440,8 +1456,8 @@ for (const e of events) {
       claimedEv += B(a.patronAmount) + B(a.guardianAmount) + B(a.referrerAmount);
       const ref = L(a.referrer);
       if (ref !== Z) {
-        const judges = (verifiers.has(ref) && !verifiers.get(ref)!.dismissed) || isActiveHolder(ref) || gtas.has(ref);
-        if (judges) trRef.test(B(a.referrerAmount) === 0n, R(tid), () => `the referrer ${short(ref)} judges scores, yet took ${usd(B(a.referrerAmount))}`);
+        const judges = gtas.has(ref) || ref === cov(tid)!.verifier;
+        if (judges) trRef.test(B(a.referrerAmount) === 0n, R(tid), () => `the referrer ${short(ref)} sits on the Council or scores the land, yet took ${usd(B(a.referrerAmount))}`);
         else trRef.ok();
       }
       break;
@@ -1587,7 +1603,7 @@ for (const p of places.values()) {
     while (n2 <= LAST_EDITION) {
       if (n2 === LAST_EDITION) { n2 = LAST_EDITION + 1; break; }
       n2++;
-      if (now >= mark + clock) { virt.add(n2); clockBurn += PER_EDITION; mark += clock; } else break;
+      if (now >= mark + clockOf(n2)) { virt.add(n2); clockBurn += PER_EDITION; mark += clockOf(n2); } else break;
     }
   }
   const stateOf = (n: number) => shut(n) || virt.has(n) ? 3 : edOpened[n] === 0 ? (n === n2 ? 1 : 0) : edSettling[n] ? 2 : 1;

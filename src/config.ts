@@ -154,7 +154,7 @@ export const FLOWS: FlowDef[] = [
 ];
 
 export const PRODUCTION: ContractConfig = {
-  yearDays: 365, maxVerificationDelayDays: 14, acceptanceDays: 30, watchdogDays: 21, minAuctionDays: 3, kycDays: 30,
+  yearDays: 365, maxVerificationDelayDays: 14, acceptanceDays: 30, watchdogDays: 21, minAuctionDays: 3, kycDays: 1,
   reviewDays: 30, responseDays: 7, panelDays: 7, redrawDays: 7, haltAfter: 3,
   powerDays: 14, anchoringDays: 14, attestationDays: 30, decisionDays: 3, gtaAttestFromDays: 21, guardianAnchorFromDays: 7,
   restoreDays: 60, damageDays: 14, firstClaimDays: 3, reseatDays: 30, accessionDays: 180,

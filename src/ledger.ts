@@ -46,8 +46,14 @@ export class Ledger {
     return 0;
   }
 
+  /** The last HolderFeeHeld seen: a set-off due to a frozen or removed Holder is withheld (HolderFeeHeld) and then
+   *  reported (SetOffPaid) -- held, not paid out. */
+  private justHeld = "";
+
   ingest(e: Decoded) {
     const a = e.args;
+    const held = this.justHeld;
+    this.justHeld = `${e.contract}.${e.name}` === "bank.HolderFeeHeld" ? `${a.tokenId}:${a.amount}` : "";
     const rid = () => this.ridOf(e);
     switch (`${e.contract}.${e.name}`) {
       case "registry.CovenantMinted": this.reqOfToken.set(a.tokenId, Number(a.requestId)); break;
@@ -119,7 +125,7 @@ export class Ledger {
       }
       case "market.BidRefunded": this.add(26, a.amount); break;
       case "market.AuctionCancelled": this.topBid.delete(a.tokenId); break;
-      case "bank.SetOffPaid": this.add(27, a.amount); this.credit(a.holder, a.amount); break;
+      case "bank.SetOffPaid": if (held !== `${a.tokenId}:${a.amount}`) { this.add(27, a.amount); this.credit(a.holder, a.amount); } break;
       case "market.RefundClaimed": this.add(28, a.amount); break;
     }
   }
