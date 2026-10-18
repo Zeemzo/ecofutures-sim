@@ -768,6 +768,20 @@ export class Engine {
         return;
       }
       const doc = await read("deeds", "getDocument", [BigInt(rid), BigInt(N(s.cursor) - 1)]);
+      // now and then the registry refuses the Deed: the verifier records the corrected one, and the Holder draws the
+      // second signing from the verifier's unpaid fee -- once, at most half of it (FM v29 P2)
+      if (saleAt === 0 && N(doc.step) === Step.DEED && !doc.correction && !this.corrected.has(rid) && this.chance(this.b.correctionPct ?? 4)) {
+        this.corrected.add(rid);
+        if (await this.act(r.verifier, "deeds", "recordDocument", [BigInt(rid), h("corrected deed", rid), BigInt(t), `${this.shortOf(N(r.country))}-REG`], "correction", rid)) {
+          const fee: bigint = r.verifierShare;
+          const amount = (fee * BigInt(20 + this.rand(30))) / 100n;
+          if (holderCan && amount !== 0n && await this.act(holder, "deeds", "drawSecondSigning", [BigInt(rid), amount, h("second signing", rid), `ipfs://receipts/${rid}/second`], "secondSigning", rid)) {
+            this.note("correction", rid, `The registry refuses the Deed for #${rid}: ${nameOf(r.verifier)} records the corrected one, and ${nameOf(holder)} draws the second signing from the verifier's fee.`);
+          }
+        }
+        this.nextAt.set(rid, t + DAY);
+        return;
+      }
       const a = await this.pickAttester(N(r.country), r.verifier, r.guardian, N(doc.recordedAt));
       if (a === zeroAddress) { this.nextAt.set(rid, N(doc.recordedAt) + this.sc.contracts.gtaAttestFromDays * DAY + 1); return; }
       await this.act(a, "deeds", "attest", [BigInt(rid), doc.docHash, h("certified copy", rid, N(s.cursor)), `${this.shortOf(N(r.country))}-REG`], "attest", rid);
@@ -778,6 +792,25 @@ export class Engine {
       await this.act(r.guardian, "registry", "mint", [BigInt(rid), this.metadataOf(rid)], "mint", rid);
     } else if (step === Step.SALE) {
       await this.sale(rid, r, t);
+    }
+  }
+
+  private corrected = new Set<number>();
+
+  /** The covenant's Holder files its cost of making good a breach: a share of the consideration still to come. */
+  async fileEnforcement(rid: number, tid: bigint, c: any, holder: Address) {
+    // one claim at a time: an earlier one still being recovered comes first
+    const [, outstanding] = await read<[Address, bigint, number, boolean, bigint]>("bank", "setOffOf", [tid]);
+    if (outstanding !== 0n) return;
+    const acct = await read("bank", "getAccount", [tid]);
+    const part: bigint = await read("bank", "considerationPart", [BigInt(c.requestId)]);
+    const total = BigInt(acct.consideration) * BigInt(c.termYears);
+    const paid = BigInt(acct.considerationYears) * BigInt(acct.consideration) + part;
+    const toCome = total > paid ? total - paid : 0n;
+    const amount = (toCome * BigInt(10 + this.rand(50))) / 100n;
+    if (amount === 0n) return;
+    if (await this.act(holder, "parties", "fileEnforcementCost", [tid, amount, h("enforcement receipts", rid), `ipfs://receipts/${rid}/enforcement`], "enforcementCost", rid)) {
+      this.note("enforcement", rid, `${nameOf(holder)} makes good the breach on #${rid} and files its cost: it comes out of the landowner's yearly consideration after the cure.`);
     }
   }
 
@@ -932,6 +965,9 @@ export class Engine {
         // has closed; or the landowner challenges the block as wrong (3E)
         if (!this.blockPlan.has(tid)) {
           this.blockPlan.set(tid, { at: t + 20 * DAY + this.rand(40) * DAY, how: this.chance(this.b.wrongBlockPct) ? 1 : 0 });
+          // the Holder makes good and files its cost against the consideration still to come (FM v29 P7): the cure,
+          // at least 14 days on, confirms it; an upheld 3E voids it
+          if (holderCan && this.chance(this.b.enforcementPct ?? 40)) await this.fileEnforcement(rid, tid, c, holder);
         }
         const bp = this.blockPlan.get(tid)!;
         if (t >= bp.at) {

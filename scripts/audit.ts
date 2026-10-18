@@ -269,6 +269,12 @@ const land = check("land-at-request", "Editions", "Every request's land is at le
 const term = check("term-at-request", "Editions", "Every request's term is within its country's range and 3-100 years", "EcoCountries.requestTerms; EcoEditions.reserve");
 // Timing and the term
 const wd = check("watchdog", "Challenges", `A watchdog challenge (W1A, W1B) is raised against the request's current verification, within the watchdog window after it (${days(cfg.watchdog)})`, "FM p15; EcoRegistry.challengeTarget");
+const setOffC = check("set-off", "Money", "An enforcement cost is filed by the covenant's Holder only while it is held for a breach, never above the consideration still to come; a cure at least 14 days after the filing confirms it, any other end voids it", "FM v29 P7; decisions of 17 Oct; EcoParties.fileEnforcementCost; EcoBank.fileSetOff, _resolveSetOff");
+const second = check("second-signing", "Money", "A second signing is drawn only for a correction the verifier recorded, once, at most half the unpaid verification fee", "FM v29 P2; decisions of 17 Oct; EcoDeeds.drawSecondSigning");
+const setOffs = new Map<bigint, number>();
+const cool = check("challenge-cooldown", "Challenges", "After a challenge is withdrawn or lapses, its challenger's organisation (a landowner: itself) raises on that request or covenant again only after a review window", "decisions of 17 Oct; EcoChallenge.raise, _close, _coolKey");
+const lastClose = new Map<string, number>();
+const coolKey = (who: string, kind: number, subject: bigint) => `${verifiers.get(who)?.org ?? 0n}|${kind}|${subject}`;
 const winOpt = check("window-options", "Challenges", "3A and 3B are raised only inside an open review window and not by its attester; 3E only by the landowner of a covenant blocked for a breach; every term option only in the term (after the End Date, 3A and 3B still in the last window, 3E on a breach block); one undecided challenge per subject", "FM p15-17; build notes (rules of ours); EcoChallenge.raise");
 const raiser = check("challenge-raiser", "Challenges", "Every challenger but 3E's is a verifier of the country from another organisation than the land's verifier (under the same Holder or not), and never that verifier or the landowner; each challenge names the defendant its option names (the verifier; the Holder for 3A; the landowner for 3D)", "FM p15; EcoChallenge._independentVerifier");
 const panelC = check("panel-independence", "Challenges", "Three judges: the country's eligible Trust Admins first, GTAs for the seats too few remain for; never the landowner, the covenant's Holder or either party's organisation's Holder; only seated judges vote", "FM p15; EcoChallenge._draw, _eligible; PanelLib");
@@ -278,7 +284,7 @@ const cons = check("challenge-consequences", "Challenges", "Each verdict has exa
 const sched = check("verification-schedule", "Term", "Each re-verification is by the seated verifier and covers every interval begun since the term started (up to the last); one that covers none is a cure of a breach block, the re-verification 3C called for, or a newly seated verifier's first; none while a challenge on the covenant is undecided, nor before the last review window has closed", "Core.verify; EcoChallenge.openWindow; EcoParties.onVerification");
 const blk = check("block-holds", "Term", "A seated verifier blocks at most twice per review window (partition and 3D blocks aside); a block in the term holds the instalments (breach or Deed), its lift releases them; now, every covenant's holds match its block and its seat", "FM P4, P7; Core.blockCovenant, _block, _unblock; EcoParties._vacate");
 const termEnd = check("term-closed", "Term", "A covenant whose term and grace have long passed has had its End Date accounted: nothing left in its account, every instalment released", "FM p9; Core.closeTerm; EcoBank.closeAccount");
-const tclk = check("term-clocks", "Term", "3A: a covenant closes early only after its restore window; 3C: the re-verification falls due at the verdict, or at the close of a review window still open (then the usual grace); a winner's identity check is called off for time only after the KYC window; a buyer of the land's accession lapses only after the accession window", "FM p4-5, p8, P6; Core.applyVerdict, closeEarly; EcoMarket.cancelStaleSale; EcoParties.lapseAccession");
+const tclk = check("term-clocks", "Term", "3A: a covenant closes early only after its restore window; 3C: the re-verification falls due at the verdict, or at the close of a review window still open (then the usual grace), unless the scheduled one comes within a review window of it; a winner's identity check is called off for time only after the KYC window; a buyer of the land's accession lapses only after the accession window", "FM p4-5, p8, P6; Core.applyVerdict, closeEarly; EcoMarket.cancelStaleSale; EcoParties.lapseAccession");
 const fr = check("emergency-freeze", "Governance", `An emergency freeze lasts ${days(cfg.emergency)}: ratified by the Council by then, lifted by the multisig, or ended after it; never again on the same Trust Admin within ${days(cfg.cooldown)} of its end`, "FM p4, p19; Governance.emergencyFreeze");
 const seat = check("seat-refilled", "Term", "A vacated seat is filled again", "FM P4");
 const rst = check("reseat-rule", "Term", "A seat passes only when it is vacant, or its verifier is out of standing or late beyond the grace: to the 3B challenger inside its first claim, or to a nominee of the covenant's Holder (after the first claim, within the reseat window) or of the Council; the new verifier is of the country, takes work, is not the one replaced, the one that lost the seat or the landowner, and is either of the replaced verifier's organisation or was never in it", "FM P4; EcoParties.nominateVerifier, acceptSeat, claimSeat, _requireSuccessor; D7");
@@ -344,6 +350,7 @@ type Req = {
   cursor: number; stepAt: number; ext: Map<number, Ext>; before?: { stepAt: number; cursor: number; ext: Map<number, Ext> };
   saleAt: number; listing: number; postSale: number; firstClaimant: string; firstClaimUntil: number; barred: string;
   recordedAt: Map<number, number>; tokenId?: bigint; ended: boolean; openedAt: number; rejected: boolean; assignedFrom?: number;
+  correction?: { index: number; by: string; drawn: boolean };
 };
 const reqs = new Map<number, Req>();
 type Seat = { vacant: boolean; removed: string; firstClaimant: string; firstClaimUntil: number; vacantSince: number };
@@ -355,7 +362,7 @@ type Cov = {
   saleApprovedAt: number; settledAt: number; accessionPending: boolean; openChallenge: bigint;
   /** A 3C verdict's re-check date (and the one before it, in the transaction that set it), and the challenge time
    *  since the last verification that fell after the due date (decision 8). */
-  reverifyBy: number; reverifyOld: number; reverifyTx: string; barred: number;
+  reverifyBy: number; reverifyOld: number; reverifyTx: string; barred: number; graceFrom: number; graceOld: number; graceTx: string;
 };
 const covs = new Map<bigint, Cov>();
 type Acct = { price: bigint; pool: bigint; balance: bigint; per: bigint; total: number; released: number; holds: number;
@@ -418,10 +425,23 @@ const dueOf = (c: Cov, rb: number) => {
 };
 // A challenge closing: the part of its time after the due date (EcoChallenge._barred), with the due date as it stood
 // before a verdict in the same transaction moved it
+// counted only to the challenge's deadline, past which anyone may lapse it (third security pass)
 const bar = (c: Cov, openedAt: number, t: number, tx: string) => {
   const due = dueOf(c, c.reverifyTx === tx ? c.reverifyOld : c.reverifyBy);
   const from = due > openedAt ? due : openedAt;
-  if (t > from) c.barred += t - from;
+  const end = Math.min(t, openedAt + deadline);
+  if (end > from) c.barred += end - from;
+};
+// When the verifier turns late (EcoParties.lateFrom): never while a Deed or partition block stands; from the later of
+// the due date and when it could act again (a lift, a new seat, the Council suspension's end), plus the grace and the
+// challenge time after the due date (decisions of 17 Oct)
+const councilEnd = new Map<string, number>();
+// (a cure's own lift, in the same transaction, comes after the verification is judged: its grace is not counted)
+const lateAtOf = (c: Cov, tx = "") => {
+  const due = dueOf(c, c.reverifyBy);
+  if (due === 0 || (c.status === CovenantStatus.BLOCKED && c.blockReason !== BlockReason.BREACH)) return 0;
+  const start = Math.max(due, c.graceTx === tx ? c.graceOld : c.graceFrom, councilEnd.get(c.verifier) ?? 0);
+  return start + cfg.maxDelay + c.barred;
 };
 const consOwed = (a: Acct, c: Cov, t: number) => {
   let y = Math.floor((t - c.termStart) / cfg.year) + 1;
@@ -499,8 +519,16 @@ for (const e of events) {
       break;
     }
     case "admin.VerifierDismissed": { const v = verifiers.get(L(a.verifier)); if (v) { v.dismissed = true; v.suspended = false; } break; }
-    case "admin.VerifierSuspended": { const v = verifiers.get(L(a.verifier)); if (v) v.suspended = true; break; }
-    case "admin.VerifierUnsuspended": { const v = verifiers.get(L(a.verifier)); if (v) v.suspended = false; break; }
+    case "admin.VerifierSuspended": {
+      const v = verifiers.get(L(a.verifier)); if (v) v.suspended = true;
+      if (L(a.by) === L(addr.governance)) councilEnd.set(L(a.verifier), t + 30 * DAY); // the Council's: at most 30 days
+      break;
+    }
+    case "admin.VerifierUnsuspended": {
+      const v = verifiers.get(L(a.verifier)); if (v) v.suspended = false;
+      const end = councilEnd.get(L(a.verifier)); if (end && end > t) councilEnd.set(L(a.verifier), t); // lifted early
+      break;
+    }
     case "admin.VerifierRetired": { const v = verifiers.get(L(a.verifier)); if (v) v.retired = true; break; }
     case "governance.GTASeated": gtas.add(L(a.gta)); break;
     case "governance.GTAUnseated": gtas.delete(L(a.gta)); break;
@@ -695,12 +723,37 @@ for (const e of events) {
         // the clock of the step this document completed: as it stood before the flow advanced (or, for a correction, now)
         const st = a.replaced ? snapshot(r) : r.before ?? snapshot(r);
         const dl0 = deadlineOf(r, st, t);
-        const guardianOk = L(a.by) !== r.guardian || (!a.replaced && t >= st.stepAt + cfg.guardianFrom);
+        // the landowner from day 7, but never the agreement to grant, which nothing attests in flow B (FM v29)
+        const guardianOk = L(a.by) !== r.guardian || (!a.replaced && t >= st.stepAt + cfg.guardianFrom && N(a.step) !== Step.AGREEMENT);
         paper.test(t <= dl0 && guardianOk, `#${r.rid}`, () => `${a.replaced ? "corrected" : "recorded"} document ${index} by ${L(a.by) === r.guardian ? "the landowner" : short(a.by)} ${date(t)}; its clock ran from ${date(st.stepAt)} to ${date(dl0)}`);
       } else {
         pst.test(t <= r.saleAt + r.postSale, `#${r.rid}`, () => `recorded ${days(t - r.saleAt)} after the sale`);
       }
-      if (a.replaced) { r.stepAt = t; r.ext.delete(r.cursor); }
+      if (a.replaced) { r.stepAt = t; r.ext.delete(r.cursor); r.correction = { index, by: L(a.by), drawn: false }; }
+      break;
+    }
+    case "deeds.SecondSigningReceipts": {
+      const r = reqs.get(N(a.requestId))!, amt = B(a.amount), k = r.correction;
+      // the fee as it stood before this draw (the AllowanceDrawn before it took the amount off r.vf)
+      second.test(!!k && k.by === r.verifier && !k.drawn && amt * 2n <= r.vf + amt, `#${r.rid}`,
+        () => `drew ${usd(amt)}: ${!k ? "no correction" : k.by !== r.verifier ? `the correction was ${short(k.by)}'s, not the verifier's` : k.drawn ? "a second draw" : `over half of ${usd(r.vf + amt)}`}`);
+      if (k) k.drawn = true;
+      break;
+    }
+    case "bank.SetOffFiled": {
+      const tid = B(a.tokenId), c = cov(tid)!, ac = accts.get(tid), amt = B(a.amount);
+      const total = ac ? ac.consPer * BigInt(c.term) : 0n, paid = ac ? BigInt(ac.consYears) * ac.consPer + ac.consPart : 0n;
+      setOffC.test(((c.causes ?? 0) & 1) !== 0 && L(a.holder) === resolve(c.holder0) && amt + paid <= total, R(tid),
+        () => `filed ${usd(amt)} by ${short(a.holder)}: breach ${((c.causes ?? 0) & 1) !== 0}, the Holder ${short(resolve(c.holder0))}, still to come ${usd(total - paid)}`);
+      setOffs.set(tid, t);
+      break;
+    }
+    case "bank.SetOffResolved": {
+      const tid = B(a.tokenId), filedAt = setOffs.get(tid) ?? t;
+      const cure = inTx(e, "core.CovenantVerified", (x) => B(x.a.tokenId) === tid).length > 0;
+      setOffC.test(!!a.confirmed === (cure && t >= filedAt + 14 * DAY), R(tid),
+        () => `${a.confirmed ? "confirmed" : "voided"} ${days(t - filedAt)} after the filing${cure ? ", at a cure" : ", with no re-verification"}`);
+      if (!a.confirmed) setOffs.delete(tid);
       break;
     }
     case "deeds.DocumentAttested": {
@@ -753,7 +806,7 @@ for (const e of events) {
         verifications: 0, blockWindow: 0, blocksInWindow: 0, reverifyPending: false, newSeatPending: false,
         seat: { vacant: false, removed: Z, firstClaimant: Z, firstClaimUntil: 0, vacantSince: 0 }, nominee: Z, nominatedBy: Z, restoreBy: 0,
         owner: L(a.guardian), saleApprovedAt: 0, settledAt: 0, accessionPending: false, openChallenge: 0n,
-        reverifyBy: 0, reverifyOld: 0, reverifyTx: "", barred: 0,
+        reverifyBy: 0, reverifyOld: 0, reverifyTx: "", barred: 0, graceFrom: 0, graceOld: 0, graceTx: "",
       });
       break;
     }
@@ -776,10 +829,11 @@ for (const e of events) {
       c.status = CovenantStatus.BLOCKED; c.blockReason = topCause(c.causes);
       break;
     }
-    case "core.DeedRestored": liftCause(cov(a.tokenId)!, 2); break;
-    case "parties.PartitionEnded": liftCause(cov(a.tokenId)!, 4); break;
+    case "core.DeedRestored": { const c = cov(a.tokenId)!; liftCause(c, 2); c.graceFrom = t; break; }
+    case "parties.PartitionEnded": { const c = cov(a.tokenId)!; liftCause(c, 4); c.graceFrom = t; break; }
     case "core.CovenantUnblocked": {
       const c = cov(a.tokenId)!;
+      c.graceOld = c.graceFrom; c.graceTx = e.tx; c.graceFrom = t; // a lift gives a fresh grace
       c.causes = 0;
       c.status = c.termStart !== 0 ? CovenantStatus.ACTIVE : CovenantStatus.MINTED; c.blockReason = 0;
       const s = streams.get(c.tid); if (s && c.termStart !== 0 && !s.ended) s.rescore = false; // the lift passes the stream
@@ -802,11 +856,14 @@ for (const e of events) {
     }
     case "core.ReverificationDue": {
       const c = cov(a.tokenId)!;
-      // FM v29: due at once; no re-verification is possible before an open review window closes (ours, 17 Oct)
-      const closes = pools.get(c.tid)?.win?.closesAt ?? 0, dueAt = closes > t ? closes : t;
-      tclk.test(N(a.by) === dueAt, R(c.tid), () => `a re-verification due ${date(N(a.by))}, ${days(N(a.by) - t)} after the verdict (expected ${date(dueAt)})`);
-      c.reverifyPending = true;
-      c.reverifyOld = c.reverifyBy; c.reverifyTx = e.tx; c.reverifyBy = N(a.by);
+      // FM v29: due at once; no re-verification is possible before an open review window closes; a scheduled one within
+      // a review window of that is the re-check, and none is set (EcoParties.recheckDue; 17 Oct)
+      const closes = pools.get(c.tid)?.win?.closesAt ?? 0, at = closes > t ? closes : t;
+      const scheduled = dueOf(c, 0), merged = scheduled !== 0 && scheduled <= at + cfg.review;
+      const dueAt = merged ? 0 : at;
+      tclk.test(N(a.by) === dueAt, R(c.tid), () => `a re-verification due ${N(a.by) ? date(N(a.by)) : "with the scheduled one"} after the verdict (expected ${dueAt ? date(dueAt) : "the scheduled one"})`);
+      c.reverifyOld = c.reverifyBy; c.reverifyTx = e.tx;
+      if (!merged) { c.reverifyPending = true; c.reverifyBy = N(a.by); }
       break;
     }
     case "core.CovenantVerified": {
@@ -820,7 +877,7 @@ for (const e of events) {
       // overdue (D3): past due + grace, from due + grace -- the due date the scheduled one or a 3C verdict's, and the
       // grace moved by the challenge time after it (FM v29; decision 8; Core.lateFrom)
       const due = dueOf(c, c.reverifyBy);
-      const lateAt = due === 0 ? 0 : due + cfg.maxDelay + c.barred;
+      const lateAt = lateAtOf(c, e.tx);
       const wantOd = lateAt !== 0 && t > lateAt ? lateAt : 0;
       c.reverifyBy = 0; c.barred = 0;
       const st = streams.get(c.tid);
@@ -857,8 +914,8 @@ for (const e of events) {
     case "core.VerifierReplaced": {
       const c = cov(a.tokenId)!, old = L(a.oldVerifier), nu = L(a.newVerifier), s = c.seat;
       const vacant = s.vacant;
-      const due = c.termStart + (c.through + 1) * c.interval;
-      const overdue = c.through < c.total && t > due + cfg.maxDelay;
+      const due = dueOf(c, c.reverifyBy), lateAt = lateAtOf(c);
+      const overdue = lateAt !== 0 && t > lateAt;
       let why = "";
       if (!vacant && inStanding(old) && !overdue) why = `the seat was not vacant, ${short(old)} in standing and not late (due ${date(due)})`;
       const claimed = vacant && nu === s.firstClaimant && t <= s.firstClaimUntil;
@@ -869,6 +926,7 @@ for (const e of events) {
       else if (vf.org !== (verifiers.get(former)?.org ?? -1n) && !independentOf(nu, former)) why ||= `${short(nu)} was in ${short(former)}'s organisation and left it`;
       rst.test(why === "", R(c.tid), () => `${short(nu)} took the seat ${date(t)}: ${why}`);
       if (vacant) c.newSeatPending = true;
+      c.graceFrom = t; // the new seat's grace runs from its filling
       c.seat = { ...s, vacant: false, firstClaimant: Z, firstClaimUntil: 0 };
       c.verifier = nu; c.nominee = Z;
       break;
@@ -914,6 +972,12 @@ for (const e of events) {
     case "market.BidRefunded": pay(e.tx, a.bidder, B(a.amount)); break;
     // a refund the token refused is kept for its owner, who collects it (decided 17 Oct)
     case "market.RefundClaimed": pay(e.tx, a.to, B(a.amount)); break;
+    // a payment or refund the token refused stays in the contract, owed: not a transfer in this transaction
+    case "bank.PaymentOwed": pay(e.tx, a.to, -B(a.amount)); break;
+    case "market.RefundOwed": // an outbid refund refused emits no BidRefunded; a sale's refund is booked by its own event
+      if (inTx(e, "market.StaleSaleCancelled", () => true).length + inTx(e, "market.SaleRefunded", () => true).length > 0) pay(e.tx, a.to, -B(a.amount));
+      break;
+    case "bank.PaymentClaimed": pay(e.tx, a.to, B(a.amount)); break;
 
     // ---- the term's money ----
     case "bank.HoldSet": { const ac = accts.get(B(a.tokenId)); if (ac) ac.holds = N(a.holds); break; }
@@ -1063,6 +1127,8 @@ for (const e of events) {
     }
     case "challenge.ChallengeRaised": {
       const cid = B(a.challengeId), o = N(a.option), subject = B(a.subject), who = L(a.challenger);
+      { const last = lastClose.get(coolKey(who, o <= Option.W1B ? 1 : 2, subject));
+        cool.test(last === undefined || t >= last + cfg.review, `challenge ${cid}`, () => `raised ${days(t - last!)} after its organisation's last challenge on the subject closed`); }
       let ch: Ch;
       if (o <= Option.W1B) {
         const r = reqs.get(N(subject))!;
@@ -1171,6 +1237,7 @@ for (const e of events) {
     }
     case "challenge.ChallengeLapsed": case "challenge.ChallengeWithdrawn": {
       const ch = chs.get(B(a.challengeId))!, lapsed = e.name === "ChallengeLapsed";
+      lastClose.set(coolKey(ch.challenger, ch.option <= Option.W1B ? 1 : 2, ch.subject), t);
       if (lapsed) dl.test(t >= ch.openedAt + deadline, `challenge ${ch.cid}`, () => `lapsed ${days(t - ch.openedAt)} after the raise`);
       const same = byTx.get(e.tx)!;
       cons.test(!same.some((x) => x.name === "PartyFlagged" || x.name === "VerdictApplied"), `challenge ${ch.cid}`, () => `${lapsed ? "lapsed" : "withdrawn"}, yet a flag or a verdict`);
@@ -1182,7 +1249,7 @@ for (const e of events) {
         const paid = same.filter((x) => x.name === "ReviewFeePaid" && B(x.a.challengeId) === ch.cid);
         chFee.test(paid.length === (each ? voters.size : 0) && paid.every((x) => N(x.a.payee) === 1 && B(x.a.amount) === each && voters.has(L(x.a.to))), `challenge ${ch.cid}`,
           () => `${lapsed ? "lapsed" : "withdrawn"} with ${voters.size} voters: paid ${paid.map((x) => usd(B(x.a.amount))).join("+") || "nothing"}, expected ${voters.size} x ${usd(each)}`);
-        bar(cov(ch.subject)!, ch.openedAt, t, e.tx);
+        if (lapsed) bar(cov(ch.subject)!, ch.openedAt, t, e.tx); // a withdrawn challenge excuses no lateness
         cov(ch.subject)!.openChallenge = 0n;
       } else {
         const jp = same.filter((x) => x.name === "JudgmentPaid");

@@ -121,6 +121,12 @@ export type Behaviour = {
   cancelOfBlockPct: number;
   /** Of blocks in the term, percent the landowner challenges as wrong (3E). */
   wrongBlockPct: number;
+  /** Of breach blocks in the term, percent where the covenant's Holder files its cost of making good (FM v29 P7): set
+   *  off against the consideration after the cure, void after an upheld 3E. Default 40. */
+  enforcementPct?: number;
+  /** Of Deeds awaiting attestation, percent the registry refuses: the verifier records a corrected Deed and the Holder
+   *  draws the second signing from the verifier's unpaid fee (FM v29 P2). Default 4. */
+  correctionPct?: number;
   resalePct: number;
   /** Of the times the EFT's owner sees TR3 waiting in its pool, percent it claims; otherwise the pool grows, and a
    *  sale passes it to the buyer (R, 14 Oct). Every last owner claims at the End Date. */
