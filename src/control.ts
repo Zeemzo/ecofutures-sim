@@ -11,11 +11,11 @@ export type Move = {
 };
 
 /** The roles as the cast is registered ("Trust Admin, Sri Lanka" is the Trust Admin role). */
-export const ROLES = ["guardian", "verifier", "patron", "Trust Admin", "GTA", "server", "foundation"] as const;
+export const ROLES = ["guardian", "verifier", "patron", "Trust Admin", "GTA", "server", "keeper", "foundation"] as const;
 /** How a role reads when it is taken over whole. */
 export const ROLE_LABEL: Record<string, string> = {
   guardian: "Every guardian", verifier: "Every verifier", patron: "Every patron", "Trust Admin": "Every Trust Admin",
-  GTA: "Every GTA (the Council)", server: "The server", foundation: "The Foundation",
+  GTA: "Every GTA (the Council)", server: "The server", keeper: "The keeper (calls anyone may send)", foundation: "The Foundation",
 };
 export type Role = (typeof ROLES)[number];
 export const roleOf = (who: Address): string => {
@@ -26,26 +26,30 @@ export const roleOf = (who: Address): string => {
 /** What each role does in a run: the calls the simulated actors make in it, for acting freely as one. */
 export const ROLE_CALLS: Record<string, [Key, string][]> = {
   guardian: [["registry", "requestVerification"], ["registry", "cancelRequest"], ["registry", "abandonRequest"], ["registry", "mint"],
-    ["bank", "listForAuction"], ["core", "proposePayee"], ["core", "acceptPayee"], ["token", "list"], ["token", "acceptOffer"], ["tree", "claimGuardian"]],
-  verifier: [["registry", "claim"], ["registry", "submitVerification"], ["parties", "rejectRequest"], ["deeds", "recordDocument"], ["deeds", "attest"],
-    ["core", "verify"], ["core", "blockCovenant"], ["core", "acceptSeat"], ["challenge", "attestVerification"], ["challenge", "raise"],
-    ["challenge", "respond"], ["challenge", "vote"], ["challenge", "withdraw"]],
-  patron: [["usdt", "mint"], ["usdt", "approve"], ["market", "bid"], ["market", "settleAuction"], ["market", "confirmSale"], ["token", "list"], ["token", "buy"], ["token", "makeOffer"],
-    ["token", "acceptOffer"], ["tree", "claimPatron"], ["tree", "claimGuardian"], ["overcharge", "mintRelic"], ["overcharge", "overcharge"], ["overcharge", "transmute"],
+    ["market", "listForAuction"], ["parties", "proposeLandSale"], ["token", "list"], ["token", "acceptOffer"], ["tree", "claimGuardian"]],
+  verifier: [["registry", "claim"], ["registry", "submitVerification"], ["parties", "rejectRequest"], ["deeds", "recordDocument"], ["deeds", "askExtension"],
+    ["deeds", "recordRefusal"], ["deeds", "attest"], ["core", "verify"], ["core", "blockCovenant"], ["parties", "claimSeat"], ["parties", "acceptSeat"],
+    ["parties", "approveLandSale"], ["challenge", "attestVerification"], ["challenge", "raise"], ["challenge", "respond"], ["challenge", "vote"], ["challenge", "withdraw"]],
+  patron: [["usdt", "mint"], ["usdt", "approve"], ["market", "bid"], ["token", "list"], ["token", "buy"], ["token", "makeOffer"],
+    ["token", "acceptOffer"], ["tree", "claimPatron"], ["overcharge", "overcharge"], ["overcharge", "transmute"],
     ["overcharge", "retireRelic"], ["overcharge", "releaseBoost"]],
-  "Trust Admin": [["admin", "addVerifier"], ["parties", "assignVerifier"], ["deeds", "anchorPower"], ["deeds", "recordDocument"], ["core", "nominateVerifier"], ["registry", "lapseSale"],
+  "Trust Admin": [["admin", "addVerifier"], ["parties", "assignVerifier"], ["parties", "nominateVerifier"], ["deeds", "anchorPower"], ["deeds", "recordDocument"],
+    ["deeds", "drawSecondSigning"], ["deeds", "recordReplacementPower"], ["deeds", "recordRestoration"], ["parties", "fileEnforcementCost"], ["registry", "lapseSale"],
     ["countries", "proposeSettings"], ["challenge", "vote"]],
   GTA: [["governance", "propose"], ["governance", "approve"], ["governance", "execute"], ["deeds", "attest"], ["challenge", "vote"]],
   server: [["admin", "setKyc"], ["governance", "emergencyFreeze"], ["editions", "closeEditionIfDue"], ["editions", "promote"]],
+  keeper: [["market", "settleAuction"], ["market", "confirmSale"], ["registry", "closeUnsold"], ["core", "closeTerm"], ["challenge", "sweepReviewPool"],
+    ["overcharge", "mintRelic"], ["tree", "claimGuardian"]],
   foundation: [["governance", "proposeFeeSplit"], ["governance", "executeFeeSplit"], ["governance", "endExpiredFreeze"], ["bank", "releaseHeldHolderFees"]],
 };
 
-/** Calls that only keep the run moving: what anyone may call to move the protocol on (the simulation makes them from
- *  the first patron's wallet), and the test USDT a new actor is given and approves. They stay automatic unless the
- *  person asks for them too. */
-export const HOUSEKEEPING = new Set(["challenge.seatPanel", "challenge.lapse", "challenge.closeWindow", "bank.settleAuction",
-  "challenge.sweepReviewPool", "registry.closeUnsold", "tree.closeEditionIfDue", "governance.execute", "deeds.refundFees",
-  "usdt.mint", "usdt.approve"]);
+/** Calls that only keep the run moving: what anyone may call to move the protocol on (the simulation sends them from
+ *  its keeper's wallet, which belongs to no role), and the test USDT a new actor is given and approves. They stay
+ *  automatic unless the person asks for them too. */
+export const HOUSEKEEPING = new Set(["challenge.seatPanel", "challenge.redrawPanel", "challenge.lapse", "challenge.closeWindow",
+  "challenge.sweepReviewPool", "market.settleAuction", "market.confirmSale", "registry.closeUnsold", "registry.lapseSale",
+  "deeds.lapse", "deeds.refundFees", "core.closeTerm", "core.closeEarly", "overcharge.mintRelic", "parties.lapseAccession",
+  "editions.closeEditionIfDue", "editions.promote", "governance.execute", "usdt.mint", "usdt.approve"]);
 
 export class Control {
   actors = new Set<Address>();

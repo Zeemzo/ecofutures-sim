@@ -52,6 +52,13 @@ const L = new Ledger();
 await e.setup((m) => console.log(`  ${m}`));
 let b = await mineAt(start);
 e.begin(b.timestamp);
+// TAKEOVER=1: the person plays Patron 1 (the take-over check): every call the actors hand it is listed at the end; only
+// Patron 1's own decisions (bids, offers, its pool) should appear, never a keeper's call. TAKEOVER=<role> takes over a
+// role whole instead (guardian: the landowners' own steps and TR3 claims)
+if (process.env.TAKEOVER) {
+  if (process.env.TAKEOVER === "1") e.control.actors.add(e.patrons[0]); else e.control.roles.add(process.env.TAKEOVER);
+  e.control.pauseOnMove = false;
+}
 console.log(`${sc.name}: deployed and cast in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 let lastLog = 0n, checks = 0, nextMonth = b.timestamp, shownAnomalies = 0;
 const fails = INVARIANTS.map(() => 0);
@@ -113,3 +120,8 @@ for (const a of e.anomalies) by[`${a.label}: ${a.error}`] = (by[`${a.label}: ${a
 if (e.anomalies.length) console.log(by);
 console.log(JSON.stringify(e.kinds));
 console.log("time (s)", Object.fromEntries(Object.entries(prof).map(([k, v]) => [k, (v / 1000).toFixed(1)])), "sends", timing.sends);
+if (process.env.TAKEOVER) {
+  const calls = new Map<string, number>();
+  for (const m of e.control.moves.values()) calls.set(`${m.c}.${m.fn}`, (calls.get(`${m.c}.${m.fn}`) ?? 0) + 1);
+  console.log(`TAKEOVER moves waiting for ${process.env.TAKEOVER === "1" ? "Patron 1" : process.env.TAKEOVER}:`, JSON.stringify([...calls]));
+}

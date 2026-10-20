@@ -76,6 +76,9 @@ export class Engine {
   foundation = getAddress("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
   server = labelAddress("server");
   emergency = labelAddress("emergency");
+  /** The backend's keeper: sends every call anyone may send once its time comes (settling, closing, sweeping, minting
+   *  a Relic). Its own wallet, so taking over the patrons never hands the person these calls. */
+  keeper = labelAddress("keeper");
   feeWallet = labelAddress("foundationWallet");
   gtas: Address[] = [];
   patrons: Address[] = [];
@@ -289,8 +292,10 @@ export class Engine {
     for (const [a, n, r] of [
       [this.foundation, "Foundation", "foundation"], [this.server, "Server", "server"],
       [this.emergency, "Emergency multisig", "foundation"], [this.feeWallet, "Foundation wallet", "foundation"],
+      [this.keeper, "Keeper", "keeper"],
     ] as [Address, string, string][]) register(a, n, r);
     await fund(this.server);
+    await fund(this.keeper);
     await fund(this.emergency);
     for (let i = 1; i <= 3; i++) {
       const g = register(labelAddress(`gta${i}`), `GTA ${i}`, "GTA");
@@ -900,7 +905,7 @@ export class Engine {
         const pass = this.kycOutcome.get(tid) ?? true;
         if (pass) {
           await this.act(this.server, "admin", "setKyc", [st.buyer, true], "kyc", rid);
-          if (await this.act(this.patrons[0], "market", "confirmSale", [tid], "confirmSale", rid)) {
+          if (await this.act(this.keeper, "market", "confirmSale", [tid], "confirmSale", rid)) {
             this.note("kyc", rid, `${nameOf(st.buyer)} passes the identity check after winning #${rid}; the sale completes.`);
             this.patrons.push(getAddress(st.buyer));
           }
@@ -925,7 +930,7 @@ export class Engine {
       const au = await read("market", "getAuction", [tid]);
       const endsAt = N(au.endsAt);
       if (t > endsAt) {
-        await this.act(this.patrons[0], "market", "settleAuction", [tid], "settle", rid);
+        await this.act(this.keeper, "market", "settleAuction", [tid], "settle", rid);
         this.nextAt.set(rid, t + DAY);
         return;
       }
@@ -934,7 +939,7 @@ export class Engine {
     }
     const closeAt = N(r.listingFrom) + N(r.listingWindow);
     if (t > closeAt) {
-      await this.act(this.patrons[0], "registry", "closeUnsold", [BigInt(rid)], "closeUnsold", rid);
+      await this.act(this.keeper, "registry", "closeUnsold", [BigInt(rid)], "closeUnsold", rid);
       this.nextAt.set(rid, t + DAY);
       return;
     }
@@ -1108,7 +1113,7 @@ export class Engine {
       const allVerified = N(c.verifiedThrough) >= N(st.acct.totalReleases);
       const blocked = N(c.status) === CovenantStatus.BLOCKED;
       if (allVerified || (blocked && t > termEnd + this.grace)) {
-        if (await this.act(this.patrons[0], "core", "closeTerm", [tid], "closeTerm", rid)) {
+        if (await this.act(this.keeper, "core", "closeTerm", [tid], "closeTerm", rid)) {
           this.note("term-ended", rid, `#${rid} reaches its End Date: the last instalment and the last TR3 release.`);
         }
         this.nextAt.set(rid, t + DAY);
@@ -1151,13 +1156,13 @@ export class Engine {
     const w = st.w;
     if (N(w.openedAt) !== 0 && t <= N(w.closesAt)) { this.nextAt.set(rid, N(w.closesAt) + 1); return; }
     if ((await read<bigint>("challenge", "poolBalance", [tid])) !== 0n) {
-      if (!(await this.act(this.patrons[0], "challenge", "sweepReviewPool", [tid], "sweep", rid))) { this.nextAt.set(rid, t + 7 * DAY); return; }
+      if (!(await this.act(this.keeper, "challenge", "sweepReviewPool", [tid], "sweep", rid))) { this.nextAt.set(rid, t + 7 * DAY); return; }
     }
     await this.claimTR3(rid, tid, true); // the End Date: the last owner takes its pool
     const [, , toEndDate] = await read<[number, bigint, boolean]>("tree", "relicSource", [tid]);
     if (toEndDate && (await read<bigint>("overcharge", "relicOf", [tid])) === 0n) {
       const id = await read<bigint>("overcharge", "nextRelicId");
-      if (await this.act(this.patrons[0], "overcharge", "mintRelic", [tid], "mintRelic", rid)) {
+      if (await this.act(this.keeper, "overcharge", "mintRelic", [tid], "mintRelic", rid)) {
         const relic = await read("overcharge", "getRelic", [id]);
         const owner = getAddress(await read<Address>("overcharge", "ownerOf", [id]));
         this.relics.push({ id, owner, edition: N(relic.edition) });
@@ -1376,7 +1381,11 @@ export class Engine {
    */
   async claimTR3(rid: number, tid: bigint, final = false) {
     const v = await read("tree", "rewardOf", [tid]);
-    if (v.guardianClaimable + v.referralClaimable !== 0n) await this.act(this.patrons[0], "tree", "claimGuardian", [tid], "claimTR3", rid);
+    if (v.guardianClaimable + v.referralClaimable !== 0n) {
+      // the landowner claims its own and its referrer's share, as in the daily round, so a landowner taken over is asked
+      const guardian = this.inTerm.get(rid)?.guardian ?? getAddress((await read("core", "getCovenant", [tid])).guardian);
+      await this.act(guardian, "tree", "claimGuardian", [tid], "claimTR3", rid);
+    }
     if (v.patronClaimable === 0n || !(final || this.chance(this.b.patronClaimPct))) return;
     const owner = getAddress(await read<Address>("token", "ownerOf", [tid]));
     await this.act(owner, "tree", "claimPatron", [tid], "claimPool", rid);
@@ -1389,7 +1398,7 @@ export class Engine {
         const w = await read("challenge", "getWindow", [tid]);
         if (N(w.openedAt) !== 0 && this.now <= N(w.closesAt)) { this.nextAt.set(rid, N(w.closesAt) + 1); return; }
         if ((await read<bigint>("challenge", "poolBalance", [tid])) !== 0n) {
-          if (!(await this.act(this.patrons[0], "challenge", "sweepReviewPool", [tid], "sweepCancelled", rid))) {
+          if (!(await this.act(this.keeper, "challenge", "sweepReviewPool", [tid], "sweepCancelled", rid))) {
             this.nextAt.set(rid, this.now + 30 * DAY);
             return;
           }
@@ -1398,7 +1407,7 @@ export class Engine {
       } else if ((N(c.status) === CovenantStatus.CLOSED || N(c.status) === CovenantStatus.CANCELLED) && N(c.termStart) === 0) {
         // never sold: its pool holds only failed winners' forfeits (item 3), swept to the landowner
         if ((await read<bigint>("challenge", "poolBalance", [tid])) !== 0n
-          && !(await this.act(this.patrons[0], "challenge", "sweepReviewPool", [tid], "sweepUnsold", rid))) {
+          && !(await this.act(this.keeper, "challenge", "sweepReviewPool", [tid], "sweepUnsold", rid))) {
           this.nextAt.set(rid, this.now + 30 * DAY);
           return;
         }
