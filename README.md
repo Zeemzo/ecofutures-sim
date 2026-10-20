@@ -11,12 +11,12 @@ Download from [Releases](https://github.com/Zeemzo/ecofutures-sim/releases/lates
 
 | | |
 |---|---|
-| Mac with Apple silicon (M1–M4) | `EcoFutures.Simulator-1.3.0-arm64.dmg` |
-| Mac with Intel | `EcoFutures.Simulator-1.3.0.dmg` |
-| Windows (64-bit) | `EcoFutures.Simulator-1.3.0-win.zip` |
-| Linux (x64) | `EcoFutures.Simulator-1.3.0.AppImage`, or `ecofutures-simulator-1.3.0.tar.gz` |
-| Linux (ARM64) | `EcoFutures.Simulator-1.3.0-arm64.AppImage`, or `ecofutures-simulator-1.3.0-arm64.tar.gz` |
-| Android (phones and tablets, 64-bit, Android 8 or later) | `EcoFutures.Simulator-1.3.0-android.apk` |
+| Mac with Apple silicon (M1–M4) | `EcoFutures.Simulator-2.4.0-arm64.dmg` |
+| Mac with Intel | `EcoFutures.Simulator-2.4.0.dmg` |
+| Windows (64-bit) | `EcoFutures.Simulator-2.4.0-win.zip` |
+| Linux (x64) | `EcoFutures.Simulator-2.4.0.AppImage`, or `ecofutures-simulator-2.4.0.tar.gz` |
+| Linux (ARM64) | `EcoFutures.Simulator-2.4.0-arm64.AppImage`, or `ecofutures-simulator-2.4.0-arm64.tar.gz` |
+| Android (phones and tablets, 64-bit, Android 8 or later) | `EcoFutures.Simulator-2.4.0-android.apk` |
 
 **Mac.** Open the disk image and drag the app to Applications. The app is not signed with an Apple Developer ID,
 so the first time macOS refuses to open it: open **System Settings → Privacy & Security**, scroll to the message
@@ -29,8 +29,8 @@ unrecognised app, choose **More info → Run anyway**.
 **Linux.** Make the AppImage executable and run it:
 
 ```bash
-chmod +x EcoFutures.Simulator-1.3.0.AppImage
-./EcoFutures.Simulator-1.3.0.AppImage
+chmod +x EcoFutures.Simulator-2.4.0.AppImage
+./EcoFutures.Simulator-2.4.0.AppImage
 ```
 
 If it asks for FUSE, install `libfuse2` (`libfuse2t64` on Ubuntu 24.04), or use the `.tar.gz`: unpack it and run
@@ -68,14 +68,15 @@ back.
     cancellations*, and *Custom*.
 - **Behaviour**: arrivals a year and for how long; the share of requests that cancel, lapse, are abandoned,
   challenged or go unsold; Path B lapses; how often review windows are attested or challenged; what panels find;
-  how late verifiers are; blocks, cancellations, resales, payee switches; the governance calendar.
+  how late verifiers are; blocks, cancellations, resales, payee switches; how often every holder claims its TR3
+  (every 24 hours by default, so TR3 is minted each day as it accrues); the governance calendar.
 - **Contracts**: every timing, the halt threshold, V, the fee split, and the edition scale.
 - **Countries**: any country by ISO 3166 numeric code — its flow, term range, listing and post-sale windows, its
   fees, and its cast: Trust Admins, organisations each, verifiers per organisation, and its share of arrivals.
-- **Flows**: the three V12 flows (path B as Ravi corrected it on 9 Oct), changed or added to: any sequence of power, registering the power, agreement,
-  deed, recording, attestation, mint and sale the contracts accept. The screen checks each against the contracts'
-  rules (a document followed by its attestation, the mint by the sale, an agreement before the mint, a recording
-  after the sale, a power registered before anything it signs) and says which one a flow breaks.
+- **Flows**: the three V12 flows (path B as Ravi corrected it on 9 Oct), changed or added to: any sequence of power (granted and registered, one step since
+  20 Oct), agreement, deed, recording, attestation, mint and sale the contracts accept. The screen checks each against
+  the contracts' rules (a document followed by its attestation, the mint by the sale, an agreement before the mint, a
+  recording after the sale, no agreement straight to the mint under a power) and says which one a flow breaks.
 - The protocol year can be 365.25 days, the calendar's average, rather than production's 365.
 
 The setup screen checks the configuration against the contracts' own rules before it deploys. Settings are
@@ -127,7 +128,13 @@ contracts repository beside this one (`../contracts`, the default) or set `CONTR
 ```bash
 (cd ../contracts && forge build)
 npm run abis                      # ABIs, bytecode and the explorer map from ../contracts
+CONTRACTS_DIR=../contracts-merged npm run abis   # or the merged build
 ```
+
+The app runs either build. The merged build (`contracts-merged`) makes EcoCountries a base of EcoEditions, at one
+address the directory names twice, and moves the portal's rulebook and edition views to EcoLens. The app tells the two
+apart by the compiled EcoCountries, which has no code of its own in the merged build. It then deploys thirteen
+proxies, reads each moved view from EcoLens, and labels the rulebook's events `countries` as before.
 
 Many scenarios at once, each on its own fresh anvil node, one log each:
 

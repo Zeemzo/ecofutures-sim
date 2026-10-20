@@ -42,7 +42,8 @@ const BEHAVIOUR: Group[] = [
     { path: "behaviour.blockPermille", label: "A re-verification finds a breach and blocks", unit: "per 1,000", max: 1000 },
     { path: "behaviour.cancelOfBlockPct", label: "Of the blocks, end in cancellation", unit: "%" },
     { path: "behaviour.resalePct", label: "An EFT is resold, each year", unit: "%" },
-    { path: "behaviour.patronClaimPct", label: "The owner claims its waiting TR3 (else its pool passes to a buyer)", unit: "%" },
+    { path: "behaviour.claimDays", label: "Every holder claims its TR3, so it is minted, every (1: 24 hours; 0: at re-verifications only)", unit: "days", min: 0, step: 1 },
+    { path: "behaviour.patronClaimPct", label: "Claims at re-verifications: the owner claims its waiting TR3 (else its pool passes to a buyer)", unit: "%" },
     { path: "behaviour.payeeSwitchPermille", label: "The land changes hands, each year", unit: "per 1,000", max: 1000 },
   ] },
 ];
@@ -77,7 +78,8 @@ const COUNTRY_COLS: { key: keyof CountryConfig; label: string; w?: string; min?:
   { key: "flowId", label: "Flow", w: "170px" }, { key: "minTerm", label: "Min term", min: 3, max: 100 }, { key: "maxTerm", label: "Max term", min: 3, max: 100 },
   { key: "listingDays", label: "Listing days", min: 1 }, { key: "postSaleDays", label: "Post-sale days", min: 0 },
   { key: "baseFee", label: "V (0 = default)", min: 0 }, { key: "deskRate", label: "D (0 = V × 4/50)", min: 0 },
-  { key: "allowanceFixed", label: "Allowance, fixed", min: 0 }, { key: "allowancePerHa", label: "Allowance per ha", min: 0 },
+  { key: "powerFee", label: "Fee 3: power", min: 0 }, { key: "agreementFee", label: "Fee 4: agreement", min: 0 },
+  { key: "registrationFixed", label: "Fee 5: fixed", min: 0 }, { key: "registrationPerHa", label: "Fee 5 per ha", min: 0 },
   { key: "typicalHa", label: "Typical plot (ha)", min: 0.01 }, { key: "largestHa", label: "Largest plot (ha)", min: 0.01 },
   { key: "valuePerHaYear", label: "Value per ha a year", min: 0 },
   { key: "holders", label: "Trust Admins", min: 1, max: 9 }, { key: "orgsPerHolder", label: "Orgs each", min: 1, max: 9 },
@@ -137,7 +139,8 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
       return td(`<input type="number" data-country="${i}" data-key="${col.key}" value="${v}" min="${col.min ?? 0}" ${col.max ? `max="${col.max}"` : ""} step="any" style="width:${col.w ?? "72px"}" aria-label="${esc(c.name)}: ${esc(col.label)}">`);
     }).join("")}<td class="act"><button type="button" class="ghost" data-remove="${i}" aria-label="Remove ${esc(c.name)}">Remove</button></td></tr>`).join("");
     // the flows: each a sequence of steps, edited here and checked against the contracts' own rules
-    const stepOpts = (sel: number) => StepName.map((n, k) => (k === 0 ? "" : `<option value="${k}" ${k === sel ? "selected" : ""}>${esc(n[0].toUpperCase() + n.slice(1))}</option>`)).join("");
+    // (the power's registration is no longer a step of its own: the Holder records the power once registered, 20 Oct)
+    const stepOpts = (sel: number) => StepName.map((n, k) => (k === 0 || k === Step.POWER_ANCHOR ? "" : `<option value="${k}" ${k === sel ? "selected" : ""}>${esc(n[0].toUpperCase() + n.slice(1))}</option>`)).join("");
     const flows = sc.flows.map((f, i) => {
       const used = sc.countries.filter((c) => c.flowId === f.id).map((c) => c.name);
       const errs = validateFlow(f.steps);
@@ -204,7 +207,7 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
       const iso = ALL_COUNTRIES.find(([n]) => n === code);
       const [name, short] = KNOWN_COUNTRIES[code] ?? (iso ? [iso[2], iso[1]] : [`Country ${code}`, `C${code}`.slice(0, 3)]);
       sc.countries.push({ code, name, short, flowId: 2, minTerm: 3, maxTerm: 100, listingDays: 358, postSaleDays: 0, baseFee: 0,
-        deskRate: 0, allowanceFixed: 30, allowancePerHa: 2, typicalHa: 10, largestHa: 500, valuePerHaYear: 50, holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 20 });
+        deskRate: 0, powerFee: 20, agreementFee: 20, registrationFixed: 30, registrationPerHa: 2, typicalHa: 10, largestHa: 500, valuePerHaYear: 50, holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 20 });
       persist(); render();
       return;
     }

@@ -40,7 +40,7 @@ function typeStr(i) {
 
 /** The NatSpec block right above `contract Name`: its @title and @notice. */
 function contractDoc(src, name) {
-  const at = src.search(new RegExp(`\\ncontract ${name}\\b`));
+  const at = src.search(new RegExp(`\\n(?:abstract )?contract ${name}\\b`));
   if (at < 0) return {};
   const before = src.slice(0, at);
   const start = before.lastIndexOf("/**");
@@ -102,12 +102,15 @@ function callsFrom(key, src) {
 // every source file under src/, by its path there (V12 keeps them in folders: protocol/, token/, common/ ...)
 const files = Object.fromEntries(readdirSync(join(v11, "src"), { recursive: true }).filter((f) => f.endsWith(".sol")).map((f) => [f, readFileSync(join(v11, "src", f), "utf8")]));
 const sourceOf = (name) => Object.entries(files).find(([f]) => f === `${name}.sol` || f.endsWith(`/${name}.sol`))?.[1];
+/** The protocol contracts a contract inherits besides EcoBase: the merged build's EcoEditions is EcoCountries. */
+const basesOf = (name, src) => ((src.match(new RegExp(`\\ncontract ${name} is ([^{]+)\\{`)) ?? [])[1] ?? "")
+  .split(",").map((b) => b.trim()).filter((b) => b && b !== "EcoBase" && CONTRACTS.some(([, n]) => n === b));
 const contracts = CONTRACTS.map(([key, name]) => {
   const art = JSON.parse(readFileSync(join(v11, "out", `${name}.sol`, `${name}.json`), "utf8"));
   // the contract's own source, then its base's: pause, unpause, sync and the upgrade gate live in EcoBase
   const own = sourceOf(name);
   if (!own) throw new Error(`no source for ${name} under ${join(v11, "src")}`);
-  const src = own + "\n" + readFileSync(join(v11, "src", "common", "EcoBase.sol"), "utf8");
+  const src = [own, ...basesOf(name, own).map(sourceOf), readFileSync(join(v11, "src", "common", "EcoBase.sol"), "utf8")].join("\n");
   const user = art.metadata?.output?.userdoc ?? {}, dev = art.metadata?.output?.devdoc ?? {};
   const fns = art.abi.filter((i) => i.type === "function").map((f) => {
     const sig = sigOf(f);
@@ -125,7 +128,9 @@ const contracts = CONTRACTS.map(([key, name]) => {
   const errors = art.abi.filter((i) => i.type === "error").map((e) => ({ name: e.name, sig: sigOf(e) })).sort((a, b) => a.name.localeCompare(b.name));
   const doc = contractDoc(src, name);
   const size = (art.deployedBytecode?.object?.length ?? 2) / 2 - 1;
-  return { key, name, ...doc, size, functions: fns, events, errors, calls: key === "lens" || key === "lists" ? [] : callsFrom(key, src) };
+  // an abstract base with no code of its own (the merged build's EcoCountries): part of the contract that inherits it
+  const partOf = size > 0 ? undefined : CONTRACTS.find(([, n]) => n !== name && basesOf(n, sourceOf(n) ?? "").includes(name))?.[0];
+  return { key, name, ...doc, size, partOf, functions: fns, events, errors, calls: key === "lens" || key === "lists" ? [] : callsFrom(key, src) };
 });
 
 // the roles, from Roles in EcoTypes.sol with their comments

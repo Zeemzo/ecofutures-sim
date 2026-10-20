@@ -47,22 +47,22 @@ for (const s of SCENARIOS) {
   s.id = "fees"; s.name = "Different fees";
   Object.assign(s.contracts, { baseFee: 80, verifierPermille: 60, taxPermille: 40, foundationPermille: 15 });
   const lk = s.countries.find((c) => c.code === 144)!, br = s.countries.find((c) => c.code === 76)!, id = s.countries.find((c) => c.code === 360)!;
-  Object.assign(lk, { baseFee: 30, deskRate: 3, allowanceFixed: 12, allowancePerHa: 5 });
-  Object.assign(br, { deskRate: 6, allowanceFixed: 0, allowancePerHa: 0 });
+  Object.assign(lk, { baseFee: 30, deskRate: 3, powerFee: 25, agreementFee: 0, registrationFixed: 12, registrationPerHa: 5 });
+  Object.assign(br, { deskRate: 6, powerFee: 0, agreementFee: 15, registrationFixed: 0, registrationPerHa: 0 });
   Object.assign(id, { baseFee: 120 });
   s.behaviour.arrivalYears = 8; s.behaviour.arrivalsPerYear = 15;
-  cases.push({ name: s.id, what: "V 80, a 6% / 4% / 1.5% split (verifier / tax / Foundation: a 1.3% pool and a 1.2% Holder share), Sri Lanka's V 30 with D 3 and an allowance of 12 + 5 a hectare, Indonesia's V 120, Brazil's D 6 and no allowance.", scenario: s, years: 10 });
+  cases.push({ name: s.id, what: "V 80, a 6% / 4% / 1.5% split (verifier / tax / Foundation: a 1.3% pool and a 1.2% Holder share), Sri Lanka's V 30 with D 3, a power fee of 25 and a registration fee of 12 + 5 a hectare, Indonesia's V 120, Brazil's D 6 with an agreement fee of 15 and no registration fee.", scenario: s, years: 10 });
 }
 {
   const s = base("fifteen");
   s.id = "new-countries"; s.name = "New countries";
   s.countries = s.countries.filter((c) => c.code !== 392);
   s.countries.push(
-    { code: 404, name: "Kenya", short: "KE", flowId: 3, minTerm: 10, maxTerm: 40, listingDays: 330, postSaleDays: 60, baseFee: 0, deskRate: 5, allowanceFixed: 20, allowancePerHa: 1, holders: 2, orgsPerHolder: 2, verifiersPerOrg: 3, weight: 25 },
-    { code: 356, name: "India", short: "IN", flowId: 1, minTerm: 5, maxTerm: 60, listingDays: 330, postSaleDays: 0, baseFee: 40, deskRate: 0, allowanceFixed: 40, allowancePerHa: 3, holders: 3, orgsPerHolder: 1, verifiersPerOrg: 4, weight: 25 },
+    { code: 404, name: "Kenya", short: "KE", flowId: 3, minTerm: 10, maxTerm: 40, listingDays: 330, postSaleDays: 60, baseFee: 0, deskRate: 5, powerFee: 0, agreementFee: 10, registrationFixed: 20, registrationPerHa: 1, holders: 2, orgsPerHolder: 2, verifiersPerOrg: 3, weight: 25 },
+    { code: 356, name: "India", short: "IN", flowId: 1, minTerm: 5, maxTerm: 60, listingDays: 330, postSaleDays: 0, baseFee: 40, deskRate: 0, powerFee: 30, agreementFee: 0, registrationFixed: 40, registrationPerHa: 3, holders: 3, orgsPerHolder: 1, verifiersPerOrg: 4, weight: 25 },
   );
   s.behaviour.arrivalYears = 8; s.behaviour.arrivalsPerYear = 18;
-  cases.push({ name: s.id, what: "Japan removed; Kenya on path B (10-40 years, D 5, allowance 20 + 1 a hectare) and India under a power (5-60 years, V 40, allowance 40 + 3 a hectare), each with its own cast.", scenario: s, years: 10 });
+  cases.push({ name: s.id, what: "Japan removed; Kenya on path B (10-40 years, D 5, an agreement fee of 10, registration 20 + 1 a hectare) and India under a power (5-60 years, V 40, a power fee of 30, registration 40 + 3 a hectare), each with its own cast.", scenario: s, years: 10 });
 }
 {
   const s = base("fifteen");

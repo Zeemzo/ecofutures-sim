@@ -35,7 +35,21 @@ const test = createTestClient({ chain: foundry, mode: "anvil", transport: serial
 
 export type Deployment = Record<Key | "forwarder", Address> & { editionScale: number; deployedAt: number };
 export let addr = {} as Deployment;
-const byAddress = new Map<string, Key>();
+/** The contracts at each address, in the order their ABIs decode its events: one each, except in the merged build,
+ *  where the rulebook (EcoCountries) is EcoEditions' base and the directory names that one contract twice. */
+const byAddress = new Map<string, Key[]>();
+
+const hasFn = (c: Key, fn: string) => abis[c].some((x) => x.type === "function" && x.name === fn);
+/** Views the merged build moved to EcoLens under another name: EcoCountries.quote is EcoLens.fees there (EcoLens has
+ *  a quote of its own). */
+const RENAMED: Record<string, string> = { "countries.quote": "fees" };
+/** Where a view is read: the contract named, or -- when its ABI no longer has it (the merged build moved the portal's
+ *  rulebook and edition views to EcoLens) -- EcoLens, under the name it has there. The separate build changes nothing. */
+export function route(c: Key, fn: string): [Key, string] {
+  if (c === "lens" || hasFn(c, fn)) return [c, fn];
+  const moved = RENAMED[`${c}.${fn}`] ?? fn;
+  return hasFn("lens", moved) ? ["lens", moved] : [c, fn];
+}
 
 /** Every custom error of every contract, so a revert that bubbles up from another contract still decodes. */
 const allErrors: Abi = (() => {
@@ -59,7 +73,26 @@ export function setDeployment(dep: Deployment) {
   addr.editionScale = Number(addr.editionScale);
   addr.deployedAt = Number(addr.deployedAt ?? 0);
   byAddress.clear();
-  for (const k of Object.keys(abis) as Key[]) if (addr[k]) byAddress.set(getAddress(addr[k]).toLowerCase(), k);
+  for (const k of Object.keys(abis) as Key[]) {
+    if (!addr[k]) continue;
+    const a = getAddress(addr[k]).toLowerCase();
+    byAddress.set(a, [...(byAddress.get(a) ?? []), k]);
+  }
+}
+
+/** The contract an event at this address belongs to, decoded: the first of the address's contracts whose ABI has it
+ *  (in the merged build the rulebook's events are `countries`', the rest `editions`', as in the separate build). */
+export function decodeAt(address: string, data: Hex, topics: readonly Hex[]): { contract: Key; name: string; args: Record<string, any> } | null {
+  for (const c of byAddress.get(address.toLowerCase()) ?? []) {
+    if (c === "usdt") return null;
+    try {
+      const d = decodeEventLog({ abi: abis[c], data, topics: topics as any, strict: false }) as any;
+      return { contract: c, name: d.eventName, args: d.args ?? {} };
+    } catch {
+      // not this contract's: the next at the address, if any
+    }
+  }
+  return null;
 }
 
 /** Each transaction is mined as it is sent (send() mines it), so its receipt is there at once. Each block is one
@@ -88,10 +121,17 @@ export function labelAddress(label: string): Address {
 
 export const readCounts: Record<string, number> = {};
 export const timing = { send: 0, sendWrite: 0, sendMine: 0, sendReceipt: 0, sends: 0 };
-export async function read<T = any>(c: Key, fn: string, args: readonly unknown[] = [], blockNumber?: bigint): Promise<T> {
-  if (blockNumber === undefined) readCounts[`${c}.${fn}`] = (readCounts[`${c}.${fn}`] ?? 0) + 1;
+export async function read<T = any>(c0: Key, fn0: string, args: readonly unknown[] = [], blockNumber?: bigint): Promise<T> {
+  if (blockNumber === undefined) readCounts[`${c0}.${fn0}`] = (readCounts[`${c0}.${fn0}`] ?? 0) + 1;
   const client = blockNumber === undefined ? pub : bulk;
+  const [c, fn] = route(c0, fn0);
   return (await client.readContract({ address: addr[c], abi: abis[c], functionName: fn, args, blockNumber })) as T;
+}
+
+/** A read batched with others (the bulk client), routed as read() routes it. */
+export function readBulk<T = any>(c0: Key, fn0: string, args: readonly unknown[] = [], blockNumber?: bigint): Promise<T> {
+  const [c, fn] = route(c0, fn0);
+  return bulk.readContract({ address: addr[c], abi: abis[c], functionName: fn, args, blockNumber }) as Promise<T>;
 }
 
 export type Sent = { ok: true; hash: Hex } | { ok: false; error: string };
@@ -129,6 +169,45 @@ export async function send(from: Address, c: Key, fn: string, args: readonly unk
   } catch (e) {
     return { ok: false, error: errorName(e) };
   }
+}
+
+export type Call = { from: Address; c: Key; fn: string; args: readonly unknown[] };
+
+/** Many calls sent together and mined in as few blocks as hold them: a day's TR3 claims, one block instead of one each.
+ *  Each has a smaller fixed gas limit than send's, so a block (100M gas) takes `perBlock` of them. */
+export async function sendMany(calls: Call[], perBlock = 40): Promise<Sent[]> {
+  const out: Sent[] = [];
+  for (let i = 0; i < calls.length; i += perBlock) {
+    const chunk = calls.slice(i, i + perBlock);
+    const sent: (Hex | { error: string })[] = [];
+    for (const x of chunk) {
+      sendHook.fn?.(x.from, x.c, x.fn, x.args);
+      try {
+        sent.push(await wallet.writeContract({
+          account: x.from, address: addr[x.c], abi: writeAbi.get(x.c)!, functionName: x.fn, args: x.args, chain: null,
+          gas: 2_000_000n,
+        }));
+      } catch (e) {
+        sent.push({ error: errorName(e) });
+      }
+    }
+    await test.mine({ blocks: 1 });
+    for (let k = 0; k < chunk.length; k++) {
+      const h = sent[k];
+      timing.sends++;
+      if (typeof h !== "string") { out.push({ ok: false, error: h.error }); continue; }
+      const rc = await receipt(h);
+      if (rc.status === "success") { out.push({ ok: true, hash: h }); continue; }
+      const x = chunk[k];
+      try {
+        await pub.simulateContract({ account: x.from, address: addr[x.c], abi: writeAbi.get(x.c)!, functionName: x.fn, args: x.args, blockNumber: rc.blockNumber - 1n });
+        out.push({ ok: false, error: "reverted at its block's time (the same call passes a block earlier)" });
+      } catch (e) {
+        out.push({ ok: false, error: errorName(e) });
+      }
+    }
+  }
+  return out;
 }
 
 /** A deployment step: from the deployer, mined, and fatal if it fails. */
@@ -225,15 +304,10 @@ export async function logsBetween(from: bigint, to: bigint): Promise<Decoded[]> 
   const logs: Log[] = await pub.getLogs({ fromBlock: from, toBlock: to });
   const out: Decoded[] = [];
   for (const l of logs) {
-    const c = byAddress.get(l.address.toLowerCase());
-    if (!c || c === "usdt") continue;
-    try {
-      const d = decodeEventLog({ abi: abis[c], data: l.data, topics: l.topics as any, strict: false }) as any;
-      if (NOISE.has(d.eventName)) continue;
-      out.push({ contract: c, name: d.eventName, args: d.args ?? {}, block: l.blockNumber!, tx: l.transactionHash!, index: l.logIndex! });
-    } catch {
-      // an event this app does not know: not one of the protocol's
-    }
+    // an event this app does not know is not one of the protocol's
+    const d = decodeAt(l.address, l.data, l.topics as Hex[]);
+    if (!d || NOISE.has(d.name)) continue;
+    out.push({ ...d, block: l.blockNumber!, tx: l.transactionHash!, index: l.logIndex! });
   }
   return out;
 }

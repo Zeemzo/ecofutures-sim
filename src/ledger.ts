@@ -10,10 +10,11 @@ export const MONEY = [
   "Instalments: Foundation", "Instalments: guardian", "Review pool funded", "Pool: attestors", "Pool: panels",
   "Pool: challengers", "Pool: swept to guardians", "Sale refunds", "Paid to patrons", "Resale volume",
   "TR3: patrons", "TR3: guardians", "TR3: referrers", "Trust Admin share withheld",
-  "Withheld shares paid out", "Held instalments at the End Date", "Allowance drawn by Holders",
+  "Withheld shares paid out", "Held instalments at the End Date", "Registration fees paid (fees 3-5)",
   "Bids paid into escrow", "Outbid bids refunded", "Enforcement costs set off", "Refused refunds collected",
+  "Second signings paid", "Forfeits of failed winners",
 ] as const;
-export const OUTFLOWS = [1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 22, 23, 24, 26, 27, 28];
+export const OUTFLOWS = [1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 22, 23, 24, 26, 27, 28, 29];
 
 export class Ledger {
   money: bigint[] = MONEY.map(() => 0n);
@@ -62,8 +63,17 @@ export class Ledger {
         this.reqOfChallenge.set(a.challengeId, option <= 2 ? Number(a.subject) : this.reqOfToken.get(a.subject) ?? 0);
         break;
       }
-      case "registry.VerificationRequested": this.add(0, a.verificationFee + a.attestationFee + a.judgmentFee + a.allowance); break;
-      case "registry.AllowanceDrawn": this.add(24, a.amount); this.credit(a.holder, a.amount); break;
+      case "registry.VerificationRequested": this.add(0, a.verificationFee + a.attestationFee + a.judgmentFee + a.registrationFees); break;
+      // fees 3-5, from EcoDeeds: each paid once at its step, and what a request did not use back to its landowner
+      case "deeds.FeePaid": this.add(24, a.amount); this.credit(a.to, a.amount); break;
+      case "deeds.FeesRefunded": {
+        this.add(4, a.amount);
+        const r = rid();
+        this.guardianGot.set(r, (this.guardianGot.get(r) ?? 0n) + a.amount);
+        break;
+      }
+      // a corrected Deed's second signing, from the verifier's unpaid fee in the Registry (FM v29 P2)
+      case "deeds.SecondSigningReceipts": this.add(29, a.amount); this.credit(a.holder, a.amount); break;
       case "registry.VerifierPaid": this.add(1, a.amount); this.credit(a.verifier, a.amount); break;
       case "registry.AttestationPaid": this.add(2, a.amount); this.credit(a.attester, a.amount); break;
       case "registry.JudgmentPaid": {
@@ -98,7 +108,8 @@ export class Ledger {
         break;
       case "bank.Activated": this.add(10, a.reviewPool); break;
       case "market.SaleRefunded": this.add(15, a.price); break;
-      case "market.StaleSaleCancelled": this.add(15, a.price); break;
+      // 99% back to the failed winner; 1% to the covenant's review pool (TR3 Model B item 3, 20 Oct)
+      case "market.StaleSaleCancelled": this.add(15, (a.price as bigint) - (a.forfeit as bigint)); this.add(30, a.forfeit); break;
       case "bank.PaidToPatron": this.add(16, a.amount); this.credit(a.owner, a.amount); break;
       case "bank.HolderFeeHeld": this.add(21, a.amount); this.heldFor.add(getAddress(a.holder)); break;
       case "bank.HolderFeeReleased": this.add(22, a.amount); this.credit(a.successor, a.amount); break;
@@ -160,6 +171,8 @@ export type Census = {
   t: number; block: bigint; rows: Row[]; edition: number; landYears: bigint; tr3Supply: bigint; gtas: number;
   registryBal: bigint; marketBal: bigint; bankBal: bigint; poolBal: bigint; registryHeld: bigint; marketHeld: bigint;
   bankHeld: bigint; poolHeld: bigint; reserve: bigint;
+  /** EcoDeeds' balance, and the fees 3-5 its requests record as not yet paid out or refunded. */
+  deedsBal: bigint; deedsHeld: bigint;
   inv: boolean[]; counts: Record<Stage, number>;
   /** Requests whose instalments run ahead of their verifications or past their term (invariant 4). */
   bad: string[];
@@ -178,7 +191,7 @@ export const standingSale = (r: Row) => (r.price ?? 0n) > 0n && r.termStart !== 
   && (r.cstatus === CovenantStatus.ACTIVE || r.cstatus === CovenantStatus.CLOSED);
 
 export const INVARIANTS = [
-  "The Registry holds exactly the fees its requests record",
+  "The Registry and EcoDeeds hold exactly the fees their requests record",
   "The Market holds exactly the prices of the sales settling; the Bank its instalment balances and withheld shares",
   "EcoChallenge holds exactly its review pools",
   "No instalment runs ahead of a verification, nor past the term",
@@ -187,7 +200,7 @@ export const INVARIANTS = [
   "Every TR3 of the 210,000,000 is minted, owed, in the Reserve, committed, streaming, unplaced or burned",
 ];
 
-type Part = { row: Row; registry: bigint; market: bigint; bank: bigint; pool: bigint; ok: boolean; token: boolean; why?: string };
+type Part = { row: Row; registry: bigint; deeds: bigint; market: bigint; bank: bigint; pool: bigint; ok: boolean; token: boolean; why?: string };
 /** A finished request's last reading: once done, nothing about it changes, so it is not read again. */
 const finalParts = new Map<number, Part>();
 export function resetCensus() { finalParts.clear(); }
@@ -204,7 +217,11 @@ async function readOne(rid: number, done: boolean, at: (c: any, fn: string, args
     status, endReason: Number(r.endReason), step, tokenId: r.tokenId, stage, guardian: r.guardian, verifier: r.verifier,
     challenged: r.challengeId !== 0n,
   };
-  const part: Part = { row, registry: r.verifierShare + r.attestationFee + r.judgmentFee + r.allowance, market: 0n, bank: 0n, pool: 0n, ok: true, token: false };
+  const f = await at("deeds", "feesOf", [BigInt(rid)]);
+  const part: Part = {
+    row, registry: r.verifierShare + r.attestationFee + r.judgmentFee, deeds: BigInt(f.power) + BigInt(f.agreement) + BigInt(f.registration),
+    market: 0n, bank: 0n, pool: 0n, ok: true, token: false,
+  };
   if (r.tokenId === 0n) return part;
   const tid = r.tokenId;
   const [c, a, settling, pool, auction, w, undecided, owner, reward, holder] = await Promise.all([
@@ -257,9 +274,9 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
     if (done.has(rid)) finalParts.set(rid, p);
     return p;
   }));
-  const [registryBal, marketBal, bankBal, poolBal, supply, mp, mg, mr, cur, gtas, nextToken, sb, maxSupply, ...eds] = await Promise.all([
+  const [registryBal, marketBal, bankBal, poolBal, deedsBal, supply, mp, mg, mr, cur, gtas, nextToken, sb, maxSupply, ...eds] = await Promise.all([
     at("usdt", "balanceOf", [addr.registry]), at("usdt", "balanceOf", [addr.market]), at("usdt", "balanceOf", [addr.bank]),
-    at("usdt", "balanceOf", [addr.challenge]),
+    at("usdt", "balanceOf", [addr.challenge]), at("usdt", "balanceOf", [addr.deeds]),
     at("tree", "totalSupply"), at("tree", "mintedToPatrons"), at("tree", "mintedToGuardians"), at("tree", "mintedToReferrers"),
     at("editions", "currentEdition"), at("governance", "getGTAs"), at("token", "nextTokenId"),
     at("tree", "supplyBreakdown"), at("tree", "MAX_SUPPLY"),
@@ -271,9 +288,9 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
   const burned: bigint = sb.burned;
   const held = await Promise.all([...ledger.heldFor].map((h) => at("bank", "heldForSuccessor", [h])));
   const bad: string[] = [];
-  let registryHeld = 0n, marketHeld = 0n, bankHeld = held.reduce((x: bigint, y: bigint) => x + y, 0n), poolHeld = 0n, ok3 = true, tokens = 0;
+  let registryHeld = 0n, deedsHeld = 0n, marketHeld = 0n, bankHeld = held.reduce((x: bigint, y: bigint) => x + y, 0n), poolHeld = 0n, ok3 = true, tokens = 0;
   for (const p of parts) {
-    registryHeld += p.registry; marketHeld += p.market; bankHeld += p.bank; poolHeld += p.pool;
+    registryHeld += p.registry; deedsHeld += p.deeds; marketHeld += p.market; bankHeld += p.bank; poolHeld += p.pool;
     if (!p.ok) { ok3 = false; if (p.why) bad.push(p.why); }
     if (p.token) tokens++;
   }
@@ -283,12 +300,12 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
   const parts7 = sb.minted + sb.owed + sb.reserve + sb.committed + sb.unstreamed + sb.unallocated + sb.burned;
   const dust = sb.unallocated > unplaced ? sb.unallocated - unplaced : unplaced - sb.unallocated;
   const inv = [
-    registryBal === registryHeld,
+    registryBal === registryHeld && deedsBal === deedsHeld,
     marketBal === marketHeld && bankBal === bankHeld,
     poolBal === poolHeld,
     ok3 && Number(nextToken) - 1 === tokens,
     supply === mp + mg + mr,
-    ledger.inflow() === ledger.outflow() + registryBal + marketBal + bankBal + poolBal,
+    ledger.inflow() === ledger.outflow() + registryBal + deedsBal + marketBal + bankBal + poolBal,
     parts7 === maxSupply && dust < 10n ** 12n,
   ];
   const counts = {} as Record<Stage, number>;
@@ -300,7 +317,7 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
   const used: bigint = open ? BigInt(open.placed) : 0n, capacity: bigint = open ? BigInt(open.capacity) : 0n;
   return {
     t, block, rows, edition: Number(cur), landYears: placed, tr3Supply: supply, gtas: gtas.length, capacity, burned,
-    registryBal, marketBal, bankBal, poolBal, registryHeld, marketHeld, bankHeld, poolHeld, reserve: sb.reserve, inv, counts, bad,
+    registryBal, marketBal, bankBal, poolBal, registryHeld, marketHeld, bankHeld, poolHeld, deedsBal, deedsHeld, reserve: sb.reserve, inv, counts, bad,
     marketCap, sold, soldProjected, tillNextEdition: capacity > used ? capacity - used : 0n, tr3Accruing, tr3Owed: sb.owed,
   };
 }

@@ -12,12 +12,16 @@ export const SERVER_ROLE = keccak256(toBytes("SERVER_ADMIN_ROLE"));
 export const EMERGENCY_ROLE = keccak256(toBytes("EMERGENCY_ROLE"));
 const C = (code as any).code as Record<string, Hex>;
 const proxyAbi = (code as any).proxyAbi as Abi;
+/** The merged build (contracts-merged): EcoCountries is EcoEditions' base -- one contract, which the directory names
+ *  twice -- so the compiled EcoCountries has no code of its own. EcoEditions then takes the default base fee. */
+export const MERGED = !C.countries || C.countries === "0x";
 
 /** An address the plan names before it exists: resolved as the contracts are deployed. */
 type Ref = { ref: "admin" | "usdt" | "feeWallet" };
 /** One argument of an initializer: the value sent, and how the setup screen shows it. */
 export type PlanArg = { value: unknown; shown: string };
-/** The fourteen proxies in the order they are deployed (EcoEditions last, so the others keep their addresses), each with what its initializer is given. The setup screen
+/** The proxies in the order they are deployed (EcoEditions last, so the others keep their addresses), each with what
+ *  its initializer is given: fourteen, or thirteen in the merged build (the rulebook is EcoEditions'). The setup screen
  *  shows this plan and deploy() sends it, so what is shown is what is deployed. */
 export function initPlan(s: Scenario): { key: Key; args: PlanArg[] }[] {
   const k = s.contracts;
@@ -29,7 +33,7 @@ export function initPlan(s: Scenario): { key: Key; args: PlanArg[] }[] {
   const admin = ref("admin", "the Admin proxy"), usdt = ref("usdt", "the settlement currency (test USDT)");
   return [
     { key: "admin", args: [] },
-    { key: "countries", args: [admin, usd(k.baseFee)] },
+    ...(MERGED ? [] : [{ key: "countries" as Key, args: [admin, usd(k.baseFee)] }]),
     { key: "registry", args: [admin, usdt, days(k.acceptanceDays), days(k.watchdogDays)] },
     { key: "deeds", args: [admin] },
     { key: "core", args: [admin, { value: BigInt(Math.round(k.yearDays * Number(DAY))), shown: `${k.yearDays} days` }, days(k.maxVerificationDelayDays)] },
@@ -41,7 +45,7 @@ export function initPlan(s: Scenario): { key: Key; args: PlanArg[] }[] {
     { key: "tree", args: [admin, text("Tree"), text("TR3")] },
     { key: "token", args: [admin, text("EcoFutures"), text("EFT"), usdt] },
     { key: "overcharge", args: [admin, text("EcoFutures Relic"), text("RELIC")] },
-    { key: "editions", args: [admin, { value: BigInt(k.editionScale), shown: `${k.editionScale.toLocaleString("en-US")} land-years × F²` }] },
+    { key: "editions", args: [admin, { value: BigInt(k.editionScale), shown: `${k.editionScale.toLocaleString("en-US")} land-years × F²` }, ...(MERGED ? [usd(k.baseFee)] : [])] },
   ];
 }
 
@@ -60,12 +64,14 @@ export async function deploy(s: Scenario, progress: (msg: string) => void = () =
   const forwarder = await make(C.forwarder, [] as Abi);
   const server = labelAddress("server"), feeWallet = labelAddress("foundationWallet"), emergency = labelAddress("emergency");
 
-  progress("Deploying the fourteen contracts behind their proxies");
+  const plan = initPlan(s);
+  progress(`Deploying the ${plan.length === 14 ? "fourteen" : "thirteen"} contracts behind their proxies${MERGED ? " (the merged build: the rulebook is EcoEditions')" : ""}`);
   const d = {} as Record<string, Address>;
   const known: Record<Ref["ref"], () => Address> = { admin: () => d.admin, usdt: () => usdt, feeWallet: () => feeWallet };
-  for (const { key, args } of initPlan(s)) {
+  for (const { key, args } of plan) {
     d[key] = await proxy(key, forwarder, "initialize", args.map((a) => (a.value as Ref)?.ref ? known[(a.value as Ref).ref]() : a.value));
   }
+  if (MERGED) d.countries = d.editions; // the directory names the one contract twice
   const admin = d.admin;
   const call = (key: Key, fn: string, args: unknown[] = [], from: Address = DEPLOYER) => sendRaw(from, d[key] ?? (key === "usdt" ? usdt : "0x"), abis[key], fn, args);
 
@@ -75,7 +81,9 @@ export async function deploy(s: Scenario, progress: (msg: string) => void = () =
     governance: d.governance, tree: d.tree, token: d.token, market: d.market, parties: d.parties, overcharge: d.overcharge,
     editions: d.editions,
   }]);
-  for (const key of ["countries", "registry", "deeds", "core", "bank", "market", "parties", "challenge", "governance", "tree", "token", "overcharge", "editions"] as Key[]) await call(key, "sync");
+  for (const key of ["countries", "registry", "deeds", "core", "bank", "market", "parties", "challenge", "governance", "tree", "token", "overcharge", "editions"] as Key[]) {
+    if (!(MERGED && key === "countries")) await call(key, "sync");
+  }
   const lens = await make(C.lens, abis.lens, [admin]);
   const lists = await make(C.lists, abis.lists, [admin, lens]);
 
@@ -102,7 +110,11 @@ export async function deploy(s: Scenario, progress: (msg: string) => void = () =
     await call("countries", "enableCountry", [
       c.code,
       { flowId: c.flowId, minTermYears: c.minTerm, maxTermYears: c.maxTerm, listingWindow: Number(BigInt(c.listingDays) * DAY), postSaleWindow: Number(BigInt(c.postSaleDays) * DAY) },
-      { baseFee: BigInt(c.baseFee) * E18, deskRate: BigInt(c.deskRate) * E18, allowanceFixed: BigInt(c.allowanceFixed) * E18, allowancePerHa: BigInt(c.allowancePerHa) * E18 },
+      {
+        baseFee: BigInt(c.baseFee) * E18, deskRate: BigInt(c.deskRate) * E18, powerFee: BigInt(c.powerFee) * E18,
+        agreementFee: BigInt(c.agreementFee) * E18, registrationFixed: BigInt(c.registrationFixed) * E18,
+        registrationPerHa: BigInt(c.registrationPerHa) * E18,
+      },
     ]);
   }
 

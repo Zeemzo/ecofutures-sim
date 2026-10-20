@@ -1,7 +1,7 @@
 // Turns each protocol event into a sentence a person can follow.
 import type { Decoded } from "./chain";
 import type { Ledger } from "./ledger";
-import { nameOf, money, dateOf, countryName, hectares, StepName, EndReason, ActionName, Payee, OptionName, BlockReason } from "./model";
+import { nameOf, money, dateOf, countryName, hectares, StepName, EndReason, ActionName, Payee, OptionName, BlockReason, YEAR } from "./model";
 
 export type Category = "lifecycle" | "money" | "challenge" | "term" | "governance" | "alert" | "note";
 export type Entry = { t: number; rid: number; cat: Category; text: string; minor?: boolean; seq: number };
@@ -17,14 +17,13 @@ type Fmt = (a: Record<string, any>, r: string, L: Ledger) => [Category, string, 
 const FORMATS: Record<string, Fmt> = {
   // ---- the request ----
   "registry.VerificationRequested": (a, r) => ["lifecycle",
-    `${nameOf(a.guardian)} asks for verification of ${hectares(n(a.landUnits))} in ${countryName(n(a.country))} for ${n(a.termYears)} years (${r}), paying ${usd(a.verificationFee + a.attestationFee + a.judgmentFee)} in fees and a ${usd(a.allowance)} execution allowance into escrow.`],
+    `${nameOf(a.guardian)} asks for verification of ${hectares(n(a.landUnits))} in ${countryName(n(a.country))} for ${n(a.termYears)} years (${r}), paying ${usd(a.verificationFee + a.attestationFee + a.judgmentFee + a.registrationFees)} in fees into escrow${a.registrationFees > 0n ? `, ${usd(a.registrationFees)} of it for the registrations` : ""}.`],
   "registry.RequestClaimed": (a, r) => ["lifecycle", `${nameOf(a.verifier)} claims ${r} for ${nameOf(a.holder)}.`, true],
   "registry.VerificationSubmitted": (a, r) => ["lifecycle",
     `${nameOf(a.verifier)} verifies ${r}: EcoScore ${n(a.ecoScore)}. The 21-day watchdog window opens.`],
   "registry.VerifierPaid": (a, r) => ["money", `${nameOf(a.verifier)} is paid ${usd(a.amount)} for verifying ${r}.`, true],
   "registry.AttestationPaid": (a, r) => ["money", `${nameOf(a.attester)} is paid ${usd(a.amount)} for attesting ${r}'s deed.`, true],
   "registry.JudgmentPaid": (a, r) => ["money", `The panel on ${r} is paid ${usd(a.amount)}.`, true],
-  "registry.AllowanceDrawn": (a, r) => ["money", `${nameOf(a.holder)} draws ${usd(a.amount)} of ${r}'s execution allowance against its receipts.`, true],
   "registry.RequestEnded": (a, r) => ["lifecycle",
     n(a.reason) === 7 ? null as any : `${r} ends: ${EndReason[n(a.reason)]}.${a.refund > 0n ? ` ${usd(a.refund)} goes back to the guardian.` : ""}`],
   "registry.RequestReopened": (a, r) => ["challenge", `${r} reopens for another verifier; ${nameOf(a.barredVerifier)} is barred from it.`],
@@ -38,8 +37,10 @@ const FORMATS: Record<string, Fmt> = {
   "registry.VerifierReassigned": (a, r) => ["governance", `${r} is reassigned from ${nameOf(a.oldVerifier)} to ${nameOf(a.newVerifier)}.`],
 
   // ---- documents ----
-  "deeds.PowerGranted": (a, r) => ["lifecycle", `${nameOf(a.holder)} grants ${nameOf(a.verifier)} the power of attorney for ${r}.`, true],
-  "deeds.PowerAnchored": (a, r) => ["lifecycle", `${nameOf(a.by)} registers the power for ${r}.`, true],
+  "deeds.PowerAnchored": (a, r) => ["lifecycle", `${nameOf(a.holder)} records the power of attorney it granted ${nameOf(a.verifier)} for ${r}, registered as ${a.registration}.`, true],
+  "deeds.FeePaid": (a, r) => ["money", `${nameOf(a.to)} is paid ${usd(a.amount)}, ${r}'s fee for ${["", "", "", "the power's registration", "the agreement's registration", "the covenant's registration"][n(a.fee)] ?? `fee ${n(a.fee)}`}.`, true],
+  "deeds.FeesRefunded": (a, r) => ["money", `${usd(a.amount)} of ${r}'s registration fees, unused, goes back to ${nameOf(a.guardian)}.`],
+  "deeds.SecondSigningReceipts": (a, r) => ["money", `${nameOf(a.holder)} is paid ${usd(a.amount)} for a second signing of ${r}'s Deed, from the verifier's fee.`, true],
   "deeds.PowerReplaced": (a, r) => ["term", `${nameOf(a.verifier)}'s new power for ${r} is recorded.`, true],
   "deeds.PowerRevoked": (a, r) => ["governance", `The power for ${r} is revoked ${a.authorised ? "with" : "without"} the Council's authority.`],
   "deeds.DocumentRecorded": (a, r) => ["lifecycle", `${nameOf(a.by)} records the ${StepName[n(a.step)]} for ${r}.`, true],
@@ -86,7 +87,7 @@ const FORMATS: Record<string, Fmt> = {
   "market.SaleCompleted": (a, r) => ["money", a.active ? `${nameOf(a.buyer)} buys ${r} for ${usd(a.price)}.`
     : `${nameOf(a.buyer)} buys ${r} for ${usd(a.price)}. Path B: the price waits in escrow until the Deed is recorded and attested.`],
   "market.SaleRefunded": (a, r) => ["money", `${nameOf(a.buyer)} is refunded ${usd(a.price)} for ${r}.`],
-  "market.StaleSaleCancelled": (a, r) => ["alert", `${r}'s sale is called off: ${nameOf(a.buyer)} ${a.failedCheck ? "failed" : "did not complete"} the identity check, and is refunded ${usd(a.price)}.`],
+  "market.StaleSaleCancelled": (a, r) => ["alert", `${r}'s sale is called off: ${nameOf(a.buyer)} ${a.failedCheck ? "failed" : "did not complete"} the identity check: it is refunded ${usd((a.price as bigint) - (a.forfeit as bigint))}, and ${usd(a.forfeit)} goes to the covenant's review pool.`],
   "bank.Activated": (a, r) => ["money",
     `${r}: ${usd(a.firstInstalment)} is paid at once, ${usd(a.reviewPool)} funds the review pool, and the rest is released over ${n(a.totalReleases)} instalments, every ${Math.round(n(a.interval) / 2_629_800)} months.`, true],
   "bank.InstalmentsReleased": (a, r) => {
@@ -124,8 +125,8 @@ const FORMATS: Record<string, Fmt> = {
     `${nameOf(a.holder)}'s emergency freeze ends${a.ratified ? ", ratified by the Council" : ": the Council did not ratify it"}.`],
   "governance.GTASeated": (a) => ["governance", `${nameOf(a.gta)} takes a seat on the Council.`],
   "governance.GTAUnseated": (a) => ["governance", `${nameOf(a.gta)} leaves the Council.`],
-  "governance.CountryVoteProposed": (a) => ["governance", `${nameOf(a.by)} proposes a vote of the GTAs and ${countryName(n(a.country))}'s Trust Admins: ${["replace a Trust Admin", "the country's fees and allowance", "the country's settings"][n(a.matter)]}.`],
-  "governance.CountryVoteExecuted": (a) => ["governance", `${countryName(n(a.country))}'s vote carries: ${["a Trust Admin is replaced", "its fees and allowance change for new requests", "its settings change for new requests"][n(a.matter)]}.`],
+  "governance.CountryVoteProposed": (a) => ["governance", `${nameOf(a.by)} proposes a vote of the GTAs and ${countryName(n(a.country))}'s Trust Admins: ${["replace a Trust Admin", "the country's fees", "the country's settings"][n(a.matter)]}.`],
+  "governance.CountryVoteExecuted": (a) => ["governance", `${countryName(n(a.country))}'s vote carries: ${["a Trust Admin is replaced", "its fees change for new requests", "its settings change for new requests"][n(a.matter)]}.`],
   "governance.DocumentRecorded": (a) => ["governance", `The Council records a document on chain (${a.uri}).`],
   "governance.FeeSplitProposed": (a) => ["governance", `A new fee split is proposed; it can take effect from ${dateOf(n(a.readyAt))}.`],
   "admin.HolderAdded": (a) => ["governance", `${nameOf(a.holder)} is admitted as a Trust Admin in ${countryName(n(a.country))}.`],
@@ -148,20 +149,24 @@ const FORMATS: Record<string, Fmt> = {
   "editions.Fixed": (a, r) => ["term", `${r}'s auction ended with a winner: its edition, ${n(a.edition)}, is fixed.`, true],
   "editions.Unfixed": (a, r) => ["term", `${r}'s sale was called off: its edition is unfixed, and its place in the queue kept.`],
   "editions.Sold": (a, r) => ["term", `${r} is sold in edition ${n(a.edition)}: ${tree(a.allocation)} over its term at an EcoScore of 100${a.capBurned > 0n ? `, the ${tree(a.capBurned)} above the per-land cap burned` : ""}.`, true],
-  "editions.Released": (a, r) => ["money", a.burned > 0n ? `${r} never became a covenant: its edition had closed, so the ${tree(a.burned)} its space held are burned.`
+  "editions.Released": (a, r) => ["money", a.toReserve > 0n ? `${r} never became a covenant: its edition had closed, so the ${tree(a.toReserve)} its space held go to the Overcharge Reserve.`
     : `${r} never became a covenant: its ${ha(a.landYears)} ha-yr in edition ${n(a.edition)} return to that edition.`, true],
   "parties.RequestRejected": (a, r) => ["lifecycle", `${nameOf(a.verifier)} rejects ${r}: ${["", "the land is not found", "it has no valid title", "no access was given"][n(a.reason)] ?? "a rejection"}. A 1A challenge may overturn it in the watchdog.`],
-  "editions.EditionOpened": (a) => ["alert", `Edition ${n(a.edition)} opens: its eight-year clock starts.`],
+  "editions.EditionOpened": (a) => ["alert", `Edition ${n(a.edition)} opens: its ${Math.round(n(a.clock) / YEAR)}-year clock starts.`],
   "editions.EditionClosed": (a) => ["alert", a.byClock
-    ? `Edition ${n(a.edition)}'s eight years are up: the ${tree(a.burned)} of room no request took are burned; its ${ha(BigInt(a.placed) - BigInt(a.sold))} ha-yr placed and not yet sold can still sell.`
+    ? `Edition ${n(a.edition)}'s clock is up: the ${tree(a.toReserve)} of room no request took go to the Overcharge Reserve; its ${ha(BigInt(a.placed) - BigInt(a.sold))} ha-yr placed and not yet sold can still sell.`
     : `Edition ${n(a.edition)} is sold out and closes.`],
   "tree.StreamReleased": (a, r) => ["money", `${r} releases ${tree(a.amount)} at an EcoScore of ${n(a.score)}.`, true],
-  "tree.ReserveCredited": (a, r) => ["money", `${tree(a.amount)} of ${r}'s allocation goes to the Overcharge Reserve (${["the score's shortfall", "days blocked", "a breach", "an early end", "an unpaid boost"][n(a.source)]}).`, true],
+  "tree.ReserveCredited": (a, r) => ["money", n(a.source) === 5
+    ? `${tree(a.amount)} of room an edition never placed goes to the Overcharge Reserve.`
+    : `${tree(a.amount)} of ${r}'s allocation goes to the Overcharge Reserve (${["the score's shortfall", "days blocked", "a breach", "an early end", "an unpaid boost"][n(a.source)]}).`, true],
   "tree.BoostPaid": (a, r) => ["money", `${r} is boosted ${tree(a.amount)} from its overcharge.`, true],
   "tree.BoostReturned": (a, r) => ["money", `${tree(a.amount)} of ${r}'s boost went unpaid and returns to the Reserve.`, true],
   "tree.ReserveFinalized": (a) => ["alert", `The Overcharge Reserve is finalised: ${tree(a.amount)} are burned.`],
   "overcharge.RelicMinted": (a, r) => ["term", `${r}'s EFT becomes a Relic of edition ${n(a.edition)} for ${nameOf(a.owner)}, with a cap of ${tree(a.cap)}.`],
-  "overcharge.OverchargeCommitted": (a, r) => ["money", `A Relic overcharges ${r}: M = ${(Number(a.mE6) / 1e6).toFixed(2)}, ${tree(a.commit)} committed from the Reserve.`],
+  "overcharge.OverchargeCommitted": (a, r) => ["money", `A Relic overcharges ${r}: m = ${(Number(a.mE6) / 1e6).toFixed(2)}, its land's TR3 +${Math.round(Number(a.mE6) / 1e4)}%, ${tree(a.commit)} committed from the Reserve.`],
+  "overcharge.CapReturned": (a, r) => ["money", `${r}'s boost ended with ${tree(a.cap)} unpaid: the cap comes back to ${nameOf(a.owner)} as an edition-${n(a.edition)} Relic.`],
+  "overcharge.RelicRetired": (a) => ["money", `${nameOf(a.owner)} retires a Relic: its ${tree(a.capLost)} of cap are lost.`, true],
   "overcharge.Transmuted": (a) => ["money", `Two Relics are transmuted into one of edition ${n(a.edition)}, with a cap of ${tree(a.cap)}.`],
 
   // ---- TR3, resale ----

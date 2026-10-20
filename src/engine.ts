@@ -2,7 +2,7 @@
 // local chain. Who the actors are, how often each thing happens and which governance the programme meets all
 // come from the run's scenario (config.ts). The rules they act under are V12's: the Covenant Flow Map v25.
 import { encodeAbiParameters, keccak256, maxUint256, zeroAddress, getAddress, type Address } from "viem";
-import { read, send, labelAddress, fund, addr, bulk, abis, type Key } from "./chain";
+import { read, send, sendMany, labelAddress, fund, addr, bulk, abis, type Key, type Call } from "./chain";
 import {
   DAY, YEAR, RequestStatus, Step, CovenantStatus, BlockReason, ChallengeState, Option, OptionName, Holds, Action,
   Outcome, OutcomeName, Agreement, COMPLETED, Matter, register, nameOf, countryName, hectares,
@@ -115,8 +115,16 @@ export class Engine {
   challengeOf = new Map<bigint, number>();
   /** Relics waiting for their owner to use them. */
   relics: { id: bigint; owner: Address; edition: number }[] = [];
+  /** The next Relic id not yet looked at: Relics are found by id, however they were minted -- from an End Date, a
+   *  transmutation, or a boost's cap returned (Relic rules E6). */
+  relicScan = 1n;
+  /** Each block of a boosted EFT on which its owner has decided whether to end the boost (E6), by token and block. */
+  boostDecided = new Set<string>();
   relicPass = 0;
   queuePass = 0;
+  /** The next daily claim round (claimDays), and the covenants in it: request -> its EFT and its landowner. */
+  claimPass = 0;
+  inTerm = new Map<number, { tid: bigint; guardian: Address }>();
   /** An unclaimed request's assigner (R, 13 Oct, section 4): a Holder from day 30, or the Council from day 60. */
   assignBy = new Map<number, "holder" | "council">();
   /** Each place's land-years: fixed at its sign-up, so read once. */
@@ -393,6 +401,7 @@ export class Engine {
     this.nextArrival = t + 2 * DAY;
     this.nextChallengePass = t;
     this.relicPass = t + 30 * DAY;
+    this.claimPass = t + DAY;
   }
 
   async tick(t: number): Promise<void> {
@@ -416,6 +425,10 @@ export class Engine {
     const due = this.requests.filter((rid) => !this.done.has(rid) && (this.nextAt.get(rid) ?? 0) <= t);
     await this.prefetch(due);
     for (const rid of due) await this.advance(rid);
+    if (this.b.claimDays > 0 && t >= this.claimPass) {
+      await this.claimRound();
+      this.claimPass = t + this.b.claimDays * DAY;
+    }
     if (t >= this.queuePass) {
       await this.promoteQueue();
       this.queuePass = t + DAY;
@@ -448,6 +461,7 @@ export class Engine {
     for (const rid of this.requests) if (!this.done.has(rid)) m = Math.min(m, this.nextAt.get(rid) ?? m);
     if (this.openChallenges.some((c) => c !== 0n)) m = Math.min(m, this.nextChallengePass);
     if (this.relics.length) m = Math.min(m, this.relicPass);
+    if (this.b.claimDays > 0 && this.inTerm.size) m = Math.min(m, this.claimPass);
     if (this.b.governanceCalendar) m = Math.min(m, this.start + (this.govStage + 1) * this.calendarYear());
     for (const x of [this.emergencyEndAt, this.unfreezeAt, this.feeSplitAt]) if (x) m = Math.min(m, x);
     if (this.landFull && !this.reserveFinalized && this.done.size === this.requests.length) m = Math.min(m, this.now + 30 * DAY);
@@ -511,8 +525,9 @@ export class Engine {
       this.note("refused", 0, `A landowner in ${countryName(country)} is turned away: ${hectares(land)} for ${term} years is over the open edition's limit.`);
       return 0;
     }
-    const [vf, af, jf, al] = await read<bigint[]>("countries", "quote", [country, BigInt(land)]);
-    const fees = vf + af + jf + al;
+    // the six upfront fees: fees 3-5 only where the country's flow has their step (TR3 Model B item 16)
+    const quoted = await read<bigint[]>("countries", "quote", [country, BigInt(land)]);
+    const fees = quoted.reduce((x, y) => x + y, 0n);
     const g = await this.newGuardian(2n * fees + 1000n * 10n ** 18n);
     const ref = this.rand(3) === 0 ? this.patrons[this.rand(this.patrons.length)] : zeroAddress;
     const rid = N(await read("registry", "nextRequestId"));
@@ -558,6 +573,18 @@ export class Engine {
     const t = this.now;
     const status = N(r.status);
     if (status === RequestStatus.ENDED) {
+      // a covenant in its term: its TR3 is claimed every claimDays from now on, until the engine is done with it
+      if (N(r.endReason) === COMPLETED && r.tokenId !== 0n && !this.inTerm.has(rid)) {
+        this.inTerm.set(rid, { tid: r.tokenId, guardian: getAddress(r.guardian) });
+      }
+      // the backend's keeper: once a request has ended, the fees 3-5 it did not use go back to its landowner (item 16)
+      if (!this.feesRefunded.has(rid)) {
+        this.feesRefunded.add(rid);
+        const f = await read("deeds", "feesOf", [BigInt(rid)]);
+        if (BigInt(f.power) + BigInt(f.agreement) + BigInt(f.registration) > 0n) {
+          await this.act(this.server, "deeds", "refundFees", [BigInt(rid)], "refundFees", rid);
+        }
+      }
       if (N(r.endReason) === COMPLETED) await this.term(rid, r.tokenId);
       else await this.finishCancelled(rid, r.tokenId);
       return;
@@ -706,26 +733,24 @@ export class Engine {
     if (preSale && step !== Step.MINT && step !== Step.SALE && step !== Step.POWER && (await this.lapseIfDue(rid, t))) return;
     if (step === Step.POWER) {
       if (!holderCan) return; // waits for a successor, an unfreeze or the Council
-      await this.act(holder, "deeds", "grantPower", [BigInt(rid), h("power", rid, t), BigInt(t + (term + 3) * YEAR)], "grantPower", rid);
-    } else if (step === Step.POWER_ANCHOR) {
-      if (this.b.governanceCalendar && !this.revokeDone && this.govStage >= 5) {
-        // a Trust Admin revokes a power without the Council's authority: recorded, and it is frozen
-        this.revokeDone = true;
-        if (await this.vote(Action.REVOKE_POWER, ["uint256", "bool"], [BigInt(rid), false], "revokePower", rid)) {
-          if (await read<boolean>("admin", "isFrozen", [holder])) {
-            this.note("gov", rid, `${nameOf(holder)} revoked the power for request #${rid} without the Council's authority, and is frozen. The Council unfreezes it in 21 days.`);
-            this.unfreezeHolder = holder;
-            this.unfreezeAt = t + 21 * DAY;
-          } else {
-            this.note("gov", rid, `The power for request #${rid} is revoked without the Council's authority; ${nameOf(holder)} has already been removed, so there is no one to freeze.`);
-          }
+      // the Holder signs the power, registers it, and records it once registered: one call (20 Oct)
+      await this.act(holder, "deeds", "anchorPower",
+        [BigInt(rid), h("power", rid, t), BigInt(t + (term + 3) * YEAR), h("reg", rid, t), `RG/${rid}/${t}`], "anchorPower", rid);
+    } else if (step === Step.DEED && preSale && N(s.cursor) > 0 && s.flowHasPower
+      && this.b.governanceCalendar && !this.revokeDone && this.govStage >= 5) {
+      // a Trust Admin revokes a power without the Council's authority, before the Deed: recorded, the flow goes back to
+      // the power, and the Trust Admin is frozen
+      this.revokeDone = true;
+      if (await this.vote(Action.REVOKE_POWER, ["uint256", "bool"], [BigInt(rid), false], "revokePower", rid)) {
+        if (await read<boolean>("admin", "isFrozen", [holder])) {
+          this.note("gov", rid, `${nameOf(holder)} revoked the power for request #${rid} without the Council's authority, and is frozen. The Council unfreezes it in 21 days.`);
+          this.unfreezeHolder = holder;
+          this.unfreezeAt = t + 21 * DAY;
+        } else {
+          this.note("gov", rid, `The power for request #${rid} is revoked without the Council's authority; ${nameOf(holder)} has already been removed, so there is no one to freeze.`);
         }
-        return;
       }
-      await this.act(r.verifier, "deeds", "anchorPower", [BigInt(rid), h("reg", rid), `RG/${rid}`], "anchorPower", rid);
     } else if ((step === Step.DEED || step === Step.AGREEMENT) && preSale) {
-      // the Holder pays the duty and the notary, and draws its costs from the allowance against the receipts
-      if (holderCan) await this.drawCosts(rid, holder, 0.5 + this.rand(40) / 100, "duty and notary");
       if (this.fate.get(rid) === F.REFUSE) {
         // the landowner will not sign: the verifier records it and keeps its verification fee
         if (await this.act(r.verifier, "deeds", "recordRefusal", [BigInt(rid)], "refusal", rid)) {
@@ -758,7 +783,6 @@ export class Engine {
         return;
       }
       if (this.fate.get(rid) === F.LAPSE_NOTHING || !holderCan) { this.nextAt.set(rid, saleAt + post + 1); return; }
-      await this.drawCosts(rid, holder, this.rand(80) / 100, "registration");
       await this.act(holder, "deeds", "recordDocument", [BigInt(rid), h("recording", rid), BigInt(t), "R.7/12.345"], "recordRecording", rid);
     } else if (step === Step.ATTEST) {
       const saleAt = N(r.saleAt), post = N(r.postSaleWindow);
@@ -814,17 +838,37 @@ export class Engine {
     }
   }
 
-  /** The Holder draws `share` of what is left of the allowance, against receipts; at most once per kind of cost. */
-  private drawn = new Set<string>();
-  async drawCosts(rid: number, holder: Address, share: number, what: string) {
-    const key = `${rid}:${what}`;
-    if (this.drawn.has(key)) return;
-    this.drawn.add(key);
-    const left: bigint = (await read("registry", "getRequest", [BigInt(rid)])).allowance;
-    const amount = (left * BigInt(Math.round(share * 1000))) / 1000n;
-    if (amount === 0n) return;
-    await this.act(holder, "deeds", "drawAllowance", [BigInt(rid), amount, h("receipts", rid, what), `ipfs://receipts/${rid}`], "drawAllowance", rid);
+  /** Every claimDays (1: every 24 hours) each covenant's holders claim the TR3 that has accrued, so it is minted then:
+   *  the landowner its own and its referrer's share (claimGuardian, which anyone may send), the EFT's owner the
+   *  patron's (claimPatron). A part the person has taken over is left to them. All in one block, or a few. */
+  async claimRound() {
+    for (const rid of [...this.inTerm.keys()]) if (this.done.has(rid)) this.inTerm.delete(rid);
+    const live = [...this.inTerm.entries()];
+    if (!live.length) return;
+    const views = await Promise.all(live.map(([, x]) => bulk.readContract({ address: addr.tree, abi: abis.tree, functionName: "rewardOf", args: [x.tid] }) as Promise<any>));
+    const owners = await Promise.all(live.map(([, x], i) => views[i].patronClaimable > 0n
+      ? (bulk.readContract({ address: addr.token, abi: abis.token, functionName: "ownerOf", args: [x.tid] }) as Promise<Address>).catch(() => null)
+      : null));
+    const calls: (Call & { label: string; rid: number })[] = [];
+    live.forEach(([rid, x], i) => {
+      const v = views[i];
+      if (v.guardianClaimable + v.referralClaimable > 0n && !this.control.mine(x.guardian, rid, "tree.claimGuardian")) {
+        calls.push({ from: x.guardian, c: "tree", fn: "claimGuardian", args: [x.tid], label: "dailyClaim", rid });
+      }
+      const owner = owners[i] ? getAddress(owners[i]!) : null;
+      if (owner && v.patronClaimable > 0n && !this.control.mine(owner, rid, "tree.claimPatron")) {
+        calls.push({ from: owner, c: "tree", fn: "claimPatron", args: [x.tid], label: "dailyClaimPool", rid });
+      }
+    });
+    if (!calls.length) return;
+    this.actions += calls.length;
+    const sent = await sendMany(calls);
+    sent.forEach((r, k) => { if (!r.ok) this.anomalies.push({ t: this.now, label: calls[k].label, rid: calls[k].rid, error: r.error }); });
+    this.wrote("tree");
   }
+
+  /** Requests whose unused fees 3-5 the keeper has sent back (or found nothing to send). */
+  private feesRefunded = new Set<number>();
 
   /** A starting price the Market accepts: at least the yearly floor (FM p8). It is paid twice a year once it reaches
    *  both USD 500 x (2T + 1) and the twice-a-year floor (O2), else yearly. */
@@ -966,6 +1010,7 @@ export class Engine {
 
     // ---- a block ----
     if (status === CovenantStatus.BLOCKED) {
+      await this.maybeReleaseBoost(rid, tid, c);
       const reason = N(c.blockReason);
       if (reason === BlockReason.DEED) { await this.restoreDeed(rid, tid, c, holder, holderCan, st); return; }
       // a vacant seat is filled first, and a term that is over goes to its End Date: both are reached below
@@ -1123,12 +1168,29 @@ export class Engine {
     this.done.add(rid);
   }
 
-  /** Relic owners apply a Relic to a later EFT they own, at the quote's commit less 5%; two of the same edition
-   *  are sometimes transmuted into one an edition lower. */
+  /** Relic owners apply a Relic to an EFT they own that is still in its first interval (Relic rules E1), at the quote's
+   *  commit less 5%; a Relic keeps what its commits leave of its cap. Two of the same edition are sometimes transmuted
+   *  into one an edition lower, and a Relic with only dust left is sometimes retired. */
   async useRelics() {
+    // every Relic minted since the last pass: from an End Date, a transmutation, or a boost's cap returned (E6)
+    const next = await read<bigint>("overcharge", "nextRelicId");
+    for (; this.relicScan < next; this.relicScan++) {
+      const id = this.relicScan;
+      if (this.relics.some((r) => r.id === id)) continue;
+      const owner = await read<Address>("overcharge", "ownerOf", [id]).catch(() => null);
+      if (!owner) continue; // burned already
+      this.relics.push({ id, owner: getAddress(owner), edition: N((await read("overcharge", "getRelic", [id])).edition) });
+    }
     const keep: { id: bigint; owner: Address; edition: number }[] = [];
     for (const r of this.relics) {
       if (!this.chance(this.b.relicUsePct)) { keep.push(r); continue; }
+      const cap = BigInt((await read("overcharge", "getRelic", [r.id])).cap);
+      if (cap < 10n * 10n ** 18n && this.rand(5) === 0) {
+        if (await this.act(r.owner, "overcharge", "retireRelic", [r.id], "retireRelic")) {
+          this.note("relic", 0, `${nameOf(r.owner)} retires an edition-${r.edition} Relic with ${(Number(cap / 10n ** 15n) / 1000).toLocaleString("en-US")} TR3 of cap left: it is burned, and the cap with it.`);
+          continue;
+        }
+      }
       const twin = keep.find((x) => x.owner === r.owner && x.edition === r.edition && r.edition >= 2);
       if (twin && this.rand(3) === 0) {
         const id = await read<bigint>("overcharge", "nextRelicId");
@@ -1139,7 +1201,7 @@ export class Engine {
         }
         continue;
       }
-      let used = false;
+      let used = false, left = cap;
       for (const rid of this.requests) {
         if (this.done.has(rid)) continue;
         const req = await read("registry", "getRequest", [BigInt(rid)]);
@@ -1149,19 +1211,35 @@ export class Engine {
         if (N(c.status) !== CovenantStatus.ACTIVE || this.now + DAY >= N(c.termEnd)) continue; // a day's margin
         if (getAddress(await read<Address>("token", "ownerOf", [tid])) !== r.owner) continue;
         if ((await read("bank", "getAccount", [tid])).holds !== 0) continue;
-        const [mE6, , , , commit] = await read<[bigint, bigint, bigint, bigint, bigint]>("overcharge", "quoteOvercharge", [tid, r.id]);
-        if (mE6 === 0n || commit === 0n) continue;
+        const [mE6, , , , , commit, fresh] = await read<[bigint, bigint, bigint, bigint, bigint, bigint, boolean]>("overcharge", "quoteOvercharge", [tid, r.id]);
+        if (!fresh || mE6 === 0n || commit === 0n) continue; // E1: only in the first interval, before its first re-verification falls due
         const rw = await read("tree", "rewardOf", [tid]);
         if (rw.mE6 !== 0n || rw.held) continue;
         if (await this.act(r.owner, "overcharge", "overcharge", [tid, r.id, (commit * 95n) / 100n], "overcharge", rid)) {
-          this.note("overcharge", rid, `${nameOf(r.owner)} applies its edition-${r.edition} Relic to #${rid}: M = ${(Number(mE6) / 1e6).toFixed(2)}, ${(Number(commit / 10n ** 15n) / 1000).toLocaleString("en-US")} TR3 committed from the Reserve.`);
+          left = BigInt((await read("overcharge", "getRelic", [r.id])).cap);
+          this.note("overcharge", rid, `${nameOf(r.owner)} applies its edition-${r.edition} Relic to #${rid}: m = ${(Number(mE6) / 1e6).toFixed(2)} (its land's TR3 +${Math.round(Number(mE6) / 1e4)}%), ${(Number(commit / 10n ** 15n) / 1000).toLocaleString("en-US")} TR3 committed from the Reserve${left > 0n ? `; the Relic keeps ${(Number(left / 10n ** 15n) / 1000).toLocaleString("en-US")} TR3 of its cap` : ", the whole of its cap: the Relic is burned"}.`);
           used = true;
           break;
         }
       }
-      if (!used) keep.push(r);
+      if (!used || left > 0n) keep.push(r);
     }
     this.relics = keep;
+  }
+
+  /** Relic rules E6: while a breach, Deed or partition block stands on a boosted EFT, its owner may end the boost at
+   *  once -- what the commitment has not paid returns to the Reserve, its cap to the owner as a Relic. Decided once per
+   *  block. */
+  async maybeReleaseBoost(rid: number, tid: bigint, c: any) {
+    const key = `${tid}:${N(c.blockedAt)}`;
+    if (this.boostDecided.has(key)) return;
+    this.boostDecided.add(key);
+    const rw = await read("tree", "rewardOf", [tid]);
+    if (rw.mE6 === 0n || rw.boostLeft === 0n || rw.ended || !this.chance(this.b.releaseBoostPct)) return;
+    const owner = getAddress(await read<Address>("token", "ownerOf", [tid]));
+    if (await this.act(owner, "overcharge", "releaseBoost", [tid], "releaseBoost", rid)) {
+      this.note("overcharge", rid, `#${rid} is blocked: ${nameOf(owner)} ends its boost, and the ${(Number(BigInt(rw.boostLeft) / 10n ** 15n) / 1000).toLocaleString("en-US")} TR3 it had not paid return to the Reserve, the cap to ${nameOf(owner)} as a Relic.`);
+    }
   }
 
   // What each due request's first look reads, fetched for all of them at once at the start of a tick.
@@ -1317,6 +1395,13 @@ export class Engine {
           }
         }
         await this.claimTR3(rid, tid, true);
+      } else if ((N(c.status) === CovenantStatus.CLOSED || N(c.status) === CovenantStatus.CANCELLED) && N(c.termStart) === 0) {
+        // never sold: its pool holds only failed winners' forfeits (item 3), swept to the landowner
+        if ((await read<bigint>("challenge", "poolBalance", [tid])) !== 0n
+          && !(await this.act(this.patrons[0], "challenge", "sweepReviewPool", [tid], "sweepUnsold", rid))) {
+          this.nextAt.set(rid, this.now + 30 * DAY);
+          return;
+        }
       }
     }
     this.done.add(rid);
@@ -1340,7 +1425,8 @@ export class Engine {
     if (option === Option.T3E) ch = getAddress(guardian);
     else {
       const exclude = option >= Option.T3A ? (await read("challenge", "getWindow", [subject])).attestor : zeroAddress;
-      ch = await this.pickIndependent(country, verifier, guardian, exclude);
+      // SubjectKind: a request (W1A, W1B) or a covenant; an organisation in its cooldown on the subject does not raise
+      ch = await this.pickIndependent(country, verifier, guardian, exclude, { kind: option <= Option.W1B ? 1 : 2, subject });
       if (ch === zeroAddress) return "No independent verifier is available to raise it.";
     }
     const cid = await read<bigint>("challenge", "nextChallengeId");
@@ -1451,14 +1537,19 @@ export class Engine {
       this.note("gov", 0, "The Council records the Foundation's amended Articles on chain.");
       await this.vote(Action.RECORD_DOCUMENT, ["bytes32", "bytes32", "string"], [h("ARTICLES"), h("articles", t), "ipfs://articles"], "record the Articles");
     } else if (y === 3) {
-      // counsel's figure for the stamp duty is in: the country's own Trust Admins and the GTAs set the allowance
+      // counsel's figures for the duty are in: the country's own Trust Admins and the GTAs vote its fees 3-5 (item 16)
       const c = first;
-      const perHa = c.allowancePerHa + 1;
-      this.note("gov", 0, `Counsel's note on ${c.name}'s stamp duty is in: the GTAs and ${c.name}'s Trust Admins vote the execution allowance to USD ${c.allowanceFixed} plus USD ${perHa} a hectare, for new requests.`);
-      const fees = { baseFee: BigInt(c.baseFee) * 10n ** 18n, deskRate: BigInt(c.deskRate) * 10n ** 18n, allowanceFixed: BigInt(c.allowanceFixed) * 10n ** 18n, allowancePerHa: BigInt(perHa) * 10n ** 18n };
+      const perHa = c.registrationPerHa + 1;
+      this.note("gov", 0, `Counsel's note on ${c.name}'s stamp duty is in: the GTAs and ${c.name}'s Trust Admins vote its registration fees, for new requests: USD ${c.powerFee} for the power, USD ${c.agreementFee} for an agreement, and USD ${c.registrationFixed} plus USD ${perHa} a hectare for the covenant.`);
+      const E = 10n ** 18n;
+      const fees = {
+        baseFee: BigInt(c.baseFee) * E, deskRate: BigInt(c.deskRate) * E, powerFee: BigInt(c.powerFee) * E, agreementFee: BigInt(c.agreementFee) * E,
+        registrationFixed: BigInt(c.registrationFixed) * E, registrationPerHa: BigInt(perHa) * E,
+      };
       const payload = encodeAbiParameters([{ type: "uint16" }, { type: "tuple", components: [
-        { name: "baseFee", type: "uint96" }, { name: "deskRate", type: "uint96" }, { name: "allowanceFixed", type: "uint96" }, { name: "allowancePerHa", type: "uint96" }] }], [c.code, fees]);
-      if (await this.countryVote(Matter.SET_FEES, c.code, payload, `set ${c.name}'s fees`)) c.allowancePerHa = perHa;
+        { name: "baseFee", type: "uint96" }, { name: "deskRate", type: "uint96" }, { name: "powerFee", type: "uint96" }, { name: "agreementFee", type: "uint96" },
+        { name: "registrationFixed", type: "uint96" }, { name: "registrationPerHa", type: "uint96" }] }], [c.code, fees]);
+      if (await this.countryVote(Matter.SET_FEES, c.code, payload, `set ${c.name}'s fees`)) c.registrationPerHa = perHa;
     } else if (y === 4) {
       const target = tas(second)[1] ?? tas(second)[0];
       if (!target) return;
@@ -1618,8 +1709,9 @@ export class Engine {
   }
 
   /** A verifier of the country who takes work and is independent of `defendant`: another organisation, never in its
-   *  organisation before (FM p2). */
-  async pickIndependent(country: number, defendant: Address, guardian: Address, exclude: Address): Promise<Address> {
+   *  organisation before (FM p2). For a challenge (`cool`), one whose organisation is not in its cooldown on the subject:
+   *  a review window after its last challenge there was withdrawn or lapsed (EcoChallenge.raise, Cooldown). */
+  async pickIndependent(country: number, defendant: Address, guardian: Address, exclude: Address, cool?: { kind: number; subject: bigint }): Promise<Address> {
     const vs = this.countryVerifiers.get(country) ?? [];
     const off = this.rand(vs.length);
     const order = vs.map((_, i) => vs[(off + i) % vs.length])
@@ -1627,7 +1719,14 @@ export class Engine {
     const facts = await Promise.all(order.map((v) => Promise.all([
       this.q<boolean>("admin", "takesWork", [v]), this.q<boolean>("admin", "independentOf", [v, defendant]),
     ])));
-    return order.find((_, i) => facts[i][0] && facts[i][1]) ?? zeroAddress;
+    const window = this.sc.contracts.reviewDays * DAY;
+    const cooled = cool ? await Promise.all(order.map(async (v) => {
+      const org = await this.q<bigint>("admin", "orgOf", [v]);
+      const key = keccak256(encodeAbiParameters([{ type: "uint256" }, { type: "uint8" }, { type: "uint256" }], [org, cool.kind, cool.subject]));
+      const at = N(await read<bigint>("challenge", "withdrawnAt", [key]));
+      return at !== 0 && this.now < at + window;
+    })) : order.map(() => false);
+    return order.find((_, i) => facts[i][0] && facts[i][1] && !cooled[i]) ?? zeroAddress;
   }
 
   /** A document's attester: an independent verifier; else another Holder of the country; else a GTA, from day 21. */

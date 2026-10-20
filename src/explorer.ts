@@ -16,6 +16,8 @@ type Ev = { name: string; sig: string; inputs: (Param & { indexed?: boolean })[]
 type Contract = {
   key: Key; name: string; title?: string; notice?: string; dev?: string; size: number; functions: Fn[]; events: Ev[];
   errors: { name: string; sig: string }[]; calls: { to: Key; fn: string }[];
+  /** An abstract base with no code of its own -- the merged build's EcoCountries -- is part of this contract. */
+  partOf?: Key;
 };
 const S = surface as unknown as { contracts: Contract[]; roles: { name: string; doc: string }[] };
 const LIMIT = 24_576;
@@ -199,7 +201,8 @@ export function mountExplorer(root: HTMLElement, hooks: ExplorerHooks) {
       const [x, y] = pos.get(k)!;
       const c = byKey(k);
       const free = LIMIT - c.size;
-      return `<g class="node ${k === selected ? "on" : ""}" data-key="${k}" tabindex="0" role="button" aria-label="${esc(c.name)}"><rect x="${x - 78}" y="${y - 21}" width="156" height="42" rx="9"></rect><text x="${x}" y="${y - 2}" text-anchor="middle">${esc(SHORT[k] ?? c.name)}</text><text class="sub" x="${x}" y="${y + 13}" text-anchor="middle">${c.functions.filter((f) => !f.plumbing).length} fns · ${free.toLocaleString("en-US")} B free</text></g>`;
+      const sub = c.partOf ? `part of ${SHORT[c.partOf] ?? c.partOf}` : `${free.toLocaleString("en-US")} B free`;
+      return `<g class="node ${k === selected ? "on" : ""}" data-key="${k}" tabindex="0" role="button" aria-label="${esc(c.name)}"><rect x="${x - 78}" y="${y - 21}" width="156" height="42" rx="9"></rect><text x="${x}" y="${y - 2}" text-anchor="middle">${esc(SHORT[k] ?? c.name)}</text><text class="sub" x="${x}" y="${y + 13}" text-anchor="middle">${c.functions.filter((f) => !f.plumbing).length} fns · ${esc(sub)}</text></g>`;
     }).join("");
     return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="The contracts and the calls between them">
       <defs>${["", "-out", "-in"].map((s) => `<marker id="arrow${s}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead${s}"></path></marker>`).join("")}</defs>
@@ -250,7 +253,7 @@ export function mountExplorer(root: HTMLElement, hooks: ExplorerHooks) {
     const list = tab === "writes" ? writes.map((f) => fnCard(c, f)).join("") : tab === "reads" ? reads.map((f) => fnCard(c, f)).join("")
       : tab === "events" ? events.map((e) => eventCard(c, e)).join("") : `<ul class="errs-list">${c.errors.map((e) => `<li><code>${esc(e.sig)}</code></li>`).join("")}</ul>`;
     return `<header class="ex-head"><div><span class="eyebrow">${esc(c.name)}</span><h2>${esc((c.title ?? c.name).replace(/^\w+ -- /, ""))}</h2></div>
-        <div class="facts-inline"><span>${hooks.ready() && addr[c.key] ? `<code>${esc(addr[c.key])}</code>` : "not deployed in this session"}</span><span>${c.size.toLocaleString("en-US")} bytes · ${(LIMIT - c.size).toLocaleString("en-US")} free of 24,576</span></div></header>
+        <div class="facts-inline"><span>${hooks.ready() && addr[c.key] ? `<code>${esc(addr[c.key])}</code>` : "not deployed in this session"}</span><span>${c.partOf ? `no code of its own: a base of ${esc(byKey(c.partOf)?.name ?? c.partOf)}, at its address` : `${c.size.toLocaleString("en-US")} bytes · ${(LIMIT - c.size).toLocaleString("en-US")} free of 24,576`}</span></div></header>
       ${c.notice ? `<p class="lead">${esc(c.notice)}</p>` : ""}${c.dev ? `<p class="small muted">${esc(c.dev)}</p>` : ""}
       <div class="links"><span>Calls</span>${to.map(chip).join("") || "<em>nothing</em>"}<span>Called by</span>${from.map(chip).join("") || "<em>no contract</em>"}</div>
       <div class="tabs ex-tabs" role="tablist">${([["writes", `Writes (${writes.length})`], ["reads", `Reads (${reads.length})`], ["events", `Events (${events.length})`], ["errors", `Errors (${c.errors.length})`]] as const).map(([k, l]) => `<button type="button" role="tab" aria-selected="${k === tab}" data-extab="${k}">${l}</button>`).join("")}

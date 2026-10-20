@@ -7,7 +7,7 @@
 //   duration       seconds: typed "30d", "12h", "1y" (365 days), "1d12h", or seconds
 //   landUnits      hundredths of a hectare: typed "100" or "1 ha"
 //   landYears      hundredths of a hectare-year
-//   score 1-100, band 1-8, permille (70 = 7%), multiplierE6 (2000000 = x2; typed "x2"), holds (bits)
+//   score 1-100, band 1-8, permille (70 = 7%), multiplierE6 (the boost m x 1e6: 618034 = +61.8%; typed "+61.8%" or "m 0.618"), holds (bits)
 //   enum:<Name>    a uint8 shown and chosen by name
 import { formatUnits } from "viem";
 import units from "./units.json";
@@ -20,7 +20,7 @@ const U = units as unknown as Units;
 let chainNow = () => Math.floor(Date.now() / 1000);
 export function setChainNow(f: () => number) { chainNow = f; }
 
-const MONEY = /^(amount|addedValue|subtractedValue|value|baseFee|defaultBaseFee_|deskRate|allowanceFixed|allowancePerHa|cap|maxTotal|minCommit|minimum|perHectare|price|startPrice)$/;
+const MONEY = /^(amount|addedValue|subtractedValue|value|baseFee|defaultBaseFee_|deskRate|powerFee|agreementFee|registrationFixed|registrationPerHa|registrationFee|registrationFees|cap|maxTotal|minCommit|minimum|perHectare|price|startPrice)$/;
 
 /** The kind of a parameter of `fn` on contract `c`, by its path ("name", or "struct.field"; outputs "returns.name"). */
 export function kindOf(c: string, fn: string, path: string, type = ""): Kind | undefined {
@@ -86,9 +86,11 @@ export function parseTyped(kind: Kind, raw: string): bigint | number {
     return Number(v);
   }
   if (kind === "multiplierE6") {
-    const x = v.match(/^(?:x\s*)?(\d+(?:\.\d+)?)\s*x?$/i);
-    if (x && /x/i.test(v)) return Number(decimal(x[1], 6));
-    if (!/^\d+$/.test(v)) throw new Error(`"${raw}" is not a multiplier (try x2, or 2000000)`);
+    // the boost m (Relic rules E2): what a Relic adds to the land's TR3, x 1e6
+    const pct = v.match(/^\+?(\d+(?:\.\d+)?)\s*%$/), m = v.match(/^m\s*=?\s*(\d+(?:\.\d+)?)$/i);
+    if (pct) return Number(decimal(pct[1], 4));
+    if (m) return Number(decimal(m[1], 6));
+    if (!/^\d+$/.test(v)) throw new Error(`"${raw}" is not a boost (try +61.8%, m 0.618, or 618034)`);
     return Number(v);
   }
   const en = enumOf(kind);
@@ -120,7 +122,7 @@ export function formatValue(kind: Kind | undefined, v: unknown): string {
   if (kind === "landUnits") return `${(Number(n) / 100).toLocaleString("en-US", { maximumFractionDigits: 2 })} ha (${n})`;
   if (kind === "landYears") return `${(Number(n) / 100).toLocaleString("en-US", { maximumFractionDigits: 2 })} ha·yr (${n})`;
   if (kind === "permille") return `${Number(n) / 10}% (${n}‰)`;
-  if (kind === "multiplierE6") return n === 0n ? "none (0)" : `×${(Number(n) / 1e6).toLocaleString("en-US", { maximumFractionDigits: 4 })} (${n})`;
+  if (kind === "multiplierE6") return n === 0n ? "none (0)" : `m ${(Number(n) / 1e6).toLocaleString("en-US", { maximumFractionDigits: 4 })}, +${(Number(n) / 1e4).toLocaleString("en-US", { maximumFractionDigits: 2 })}% (${n})`;
   if (kind === "holds") {
     const names = enumNames("Holds").filter(([, b]) => (Number(n) & b) !== 0).map(([k]) => k);
     return `${names.join(" | ") || "none"} (${n})`;
@@ -151,7 +153,7 @@ export function hintFor(kind: Kind | undefined): string | undefined {
     case "score": return "EcoScore 1–100";
     case "band": return "IUCN band 1–8";
     case "permille": return "per thousand: 70 = 7%";
-    case "multiplierE6": return "x2 (or 2000000)";
+    case "multiplierE6": return "+61.8% (or 618034)";
     default: return undefined;
   }
 }

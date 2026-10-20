@@ -27,12 +27,13 @@ export const roleOf = (who: Address): string => {
 export const ROLE_CALLS: Record<string, [Key, string][]> = {
   guardian: [["registry", "requestVerification"], ["registry", "cancelRequest"], ["registry", "abandonRequest"], ["registry", "mint"],
     ["bank", "listForAuction"], ["core", "proposePayee"], ["core", "acceptPayee"], ["token", "list"], ["token", "acceptOffer"], ["tree", "claimGuardian"]],
-  verifier: [["registry", "claim"], ["registry", "submitVerification"], ["parties", "rejectRequest"], ["deeds", "anchorPower"], ["deeds", "recordDocument"], ["deeds", "attest"],
+  verifier: [["registry", "claim"], ["registry", "submitVerification"], ["parties", "rejectRequest"], ["deeds", "recordDocument"], ["deeds", "attest"],
     ["core", "verify"], ["core", "blockCovenant"], ["core", "acceptSeat"], ["challenge", "attestVerification"], ["challenge", "raise"],
     ["challenge", "respond"], ["challenge", "vote"], ["challenge", "withdraw"]],
   patron: [["usdt", "mint"], ["usdt", "approve"], ["market", "bid"], ["market", "settleAuction"], ["market", "confirmSale"], ["token", "list"], ["token", "buy"], ["token", "makeOffer"],
-    ["token", "acceptOffer"], ["tree", "claimPatron"], ["tree", "claimGuardian"], ["overcharge", "mintRelic"], ["overcharge", "overcharge"], ["overcharge", "transmute"]],
-  "Trust Admin": [["admin", "addVerifier"], ["parties", "assignVerifier"], ["deeds", "grantPower"], ["deeds", "recordDocument"], ["core", "nominateVerifier"], ["registry", "lapseSale"],
+    ["token", "acceptOffer"], ["tree", "claimPatron"], ["tree", "claimGuardian"], ["overcharge", "mintRelic"], ["overcharge", "overcharge"], ["overcharge", "transmute"],
+    ["overcharge", "retireRelic"], ["overcharge", "releaseBoost"]],
+  "Trust Admin": [["admin", "addVerifier"], ["parties", "assignVerifier"], ["deeds", "anchorPower"], ["deeds", "recordDocument"], ["core", "nominateVerifier"], ["registry", "lapseSale"],
     ["countries", "proposeSettings"], ["challenge", "vote"]],
   GTA: [["governance", "propose"], ["governance", "approve"], ["governance", "execute"], ["deeds", "attest"], ["challenge", "vote"]],
   server: [["admin", "setKyc"], ["governance", "emergencyFreeze"], ["editions", "closeEditionIfDue"], ["editions", "promote"]],
@@ -43,7 +44,7 @@ export const ROLE_CALLS: Record<string, [Key, string][]> = {
  *  the first patron's wallet), and the test USDT a new actor is given and approves. They stay automatic unless the
  *  person asks for them too. */
 export const HOUSEKEEPING = new Set(["challenge.seatPanel", "challenge.lapse", "challenge.closeWindow", "bank.settleAuction",
-  "challenge.sweepReviewPool", "registry.closeUnsold", "tree.closeEditionIfDue", "governance.execute",
+  "challenge.sweepReviewPool", "registry.closeUnsold", "tree.closeEditionIfDue", "governance.execute", "deeds.refundFees",
   "usdt.mint", "usdt.approve"]);
 
 export class Control {

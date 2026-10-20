@@ -344,7 +344,7 @@ function sample(c: Census): Sample {
   return {
     t: c.t,
     paid: [m[9] + m[4] + m[14], m[1] + m[6], m[7] + m[22], m[8], m[2] + m[3] + m[11] + m[12] + m[13], m[15] + m[16]],
-    held: [toUnits(c.bankBal), toUnits(c.poolBal), toUnits(c.registryBal)],
+    held: [toUnits(c.bankBal), toUnits(c.poolBal), toUnits(c.registryBal + c.deedsBal)],
     states: [
       (k.requested ?? 0) + (k.claimed ?? 0) + (k.watchdog ?? 0) + (k.flow ?? 0),
       (k["for-sale"] ?? 0) + (k.auction ?? 0) + (k.escrow ?? 0),
@@ -445,9 +445,9 @@ function renderTicker() {
     item("Transactions", S.engine.actions.toLocaleString("en-US"), "Every transaction the actors have sent"),
     item("EFTs sold", c.sold.toLocaleString("en-US"), "EFTs sold and still standing"),
     item("TR3 minted", money(c.tr3Supply, 2), "TR3 supply"),
-    item("TR3 accruing", money(c.tr3Accruing, 2), "TR3 the covenants have accrued since their last release, at the EcoScore in force. Each covenant's is released at its next passing re-verification, then minted when claimed; days past due go to the Reserve instead"),
-    item("Till next edition", `${hectareYears(c.tillNextEdition)} ha-yr`, "Hectare-years of land still to place before the open edition fills; eight years after it opened it closes anyway"),
-    item("TR3 burned", money(c.burned, 2), "TR3 that will never be minted: room no land took when an edition closed, and what placed lands will not mint (an EcoScore below 100, the per-covenant cap, a cancellation's forfeit, a request that ended before its covenant). Each edition's 10,000,000 is minted or burned"),
+    item("TR3 streaming", money(c.tr3Accruing, 2), "TR3 the covenants have streamed since their last settlement, at the EcoScore in force, up to what each one's last verification underwrote: claimable now, and minted when claimed. A late verifier's days wait at the horizon and are released by its verification, never forfeited"),
+    item("Till next edition", `${hectareYears(c.tillNextEdition)} ha-yr`, "Hectare-years of land still to place before the open edition fills; when its clock runs out it closes anyway"),
+    item("TR3 burned", money(c.burned, 2), "TR3 that will never be minted: an allocation's excess over the per-covenant cap of 1,000,000, and the Overcharge Reserve once it is finalised at the programme's end. Room an edition never placed, and a score's shortfall, go to the Reserve instead"),
   ].join("");
 }
 
@@ -460,9 +460,9 @@ function renderKpis() {
     [money(m[1] + m[6]), "USDT paid to verifiers"],
     [money(m[7] + m[22] + m[8]), "USDT to Trust Admins and the Foundation"],
     [money(m[2] + m[3] + m[11] + m[12] + m[13]), "USDT to attesters, panels, challengers"],
-    [money(c.registryBal + c.bankBal + c.poolBal), "USDT held by the protocol now"],
+    [money(c.registryBal + c.deedsBal + c.bankBal + c.poolBal), "USDT held by the protocol now"],
     [`${((k.active ?? 0) + (k.blocked ?? 0) + (k.ending ?? 0)).toLocaleString("en-US")}`, "covenants in their term"],
-    [money(c.tr3Accruing), "TR3 accruing, released at each covenant's next re-verification"],
+    [money(c.tr3Accruing), "TR3 streamed and not yet settled: claimable now"],
     [`${Math.min(c.edition, LAST_EDITION)}`, `edition · ${hectareYears(c.landYears)} hectare-years placed`],
   ];
   $("kpis").innerHTML = items.map(([b, s]) => `<div class="kpi"><b>${b}</b><span>${s}</span></div>`).join("");
@@ -554,7 +554,7 @@ function renderCharts() {
   lineChart("cHeld", labels, [
     { label: "Bank: instalments, escrow", data: s.map((x) => x.held[0]), color: css("--moss"), fill: true },
     { label: "Review pools", data: s.map((x) => x.held[1]), color: css("--amber"), fill: true },
-    { label: "Registry: upfront escrow", data: s.map((x) => x.held[2]), color: css("--slate"), fill: true },
+    { label: "Registry and EcoDeeds: upfront escrow", data: s.map((x) => x.held[2]), color: css("--slate"), fill: true },
   ], false);
   lineChart("cStates", labels, [
     { label: "Before the mint", data: s.map((x) => x.states[0]), color: css("--flow") },
@@ -748,10 +748,10 @@ async function renderDrawer(rid: number, force: boolean) {
     fact("Paid to the guardian", `${money(L.guardianGot.get(rid) ?? 0n)} USDT`),
     fact("TR3 minted", `${money(L.tr3.get(rid) ?? 0n)} TR3`),
   ];
-  if (reward && reward.allocation > 0n && !reward.ended) facts.push(fact("TR3 accruing", `${money(reward.pending)} TR3, released at the next re-verification`));
+  if (reward && reward.allocation > 0n && !reward.ended) facts.push(fact("TR3 streaming", `${money(reward.pending)} TR3 streamed since the last settlement, claimable now${reward.horizon ? `; the stream runs to ${dateOf(Number(reward.horizon))}, what the last verification underwrote` : ""}`));
   if (row.termStart) facts.push(fact("Term", `${dateOf(row.termStart)} to ${dateOf(row.termEnd!)}`));
-  if (reward && reward.held) facts.push(fact("TR3", "held: nothing is released until the hold lifts"));
-  if (reward && reward.mE6 > 0n) facts.push(fact("Overcharged", `M = ${(Number(reward.mE6) / 1e6).toFixed(2)}, ${money(reward.boostLeft)} TR3 of boost still to pay`));
+  if (reward && reward.held) facts.push(fact("TR3", "stopped by a block or an upheld 3B: what accrues is held until it lifts"));
+  if (reward && reward.mE6 > 0n) facts.push(fact("Overcharged", `m = ${(Number(reward.mE6) / 1e6).toFixed(2)} (its land's TR3 +${Math.round(Number(reward.mE6) / 1e4)}%), ${money(reward.boostLeft)} TR3 of boost still to pay`));
   let progress = "";
   if (row.total) {
     const pct = Math.round(((row.released ?? 0) / row.total) * 100);
@@ -813,8 +813,8 @@ function renderInvariants() {
   $("dTitle").textContent = "The six invariants";
   const c = S.census!;
   $("dBody").innerHTML = `<ol class="inv-list">${INVARIANTS.map((txt, i) => `<li><i class="${S.invFails[i] ? "fail" : ""}"></i><span>${esc(txt)}</span><span class="mono small">${S.invFails[i] ? `${S.invFails[i]} failed` : "held"}</span></li>`).join("")}</ol>
-    <p class="small muted">Now: the Registry holds ${money(c.registryBal, 2)} USDT and its requests record ${money(c.registryHeld, 2)}; the Bank holds ${money(c.bankBal, 2)} and records ${money(c.bankHeld, 2)}; EcoChallenge holds ${money(c.poolBal, 2)} and records ${money(c.poolHeld, 2)}.<br>
-    Paid in ${money(S.ledger.inflow(), 2)} = paid out ${money(S.ledger.outflow(), 2)} + held ${money(c.registryBal + c.bankBal + c.poolBal, 2)}.</p>`;
+    <p class="small muted">Now: the Registry holds ${money(c.registryBal, 2)} USDT and its requests record ${money(c.registryHeld, 2)}; EcoDeeds holds ${money(c.deedsBal, 2)} of fees 3-5 and records ${money(c.deedsHeld, 2)}; the Bank holds ${money(c.bankBal, 2)} and records ${money(c.bankHeld, 2)}; EcoChallenge holds ${money(c.poolBal, 2)} and records ${money(c.poolHeld, 2)}.<br>
+    Paid in ${money(S.ledger.inflow(), 2)} = paid out ${money(S.ledger.outflow(), 2)} + held ${money(c.registryBal + c.deedsBal + c.marketBal + c.bankBal + c.poolBal, 2)}.</p>`;
 }
 
 function hectareYears(landYears: bigint): string {
@@ -835,7 +835,7 @@ function programmeOver() {
   const fails = S.invFails.reduce((a, b) => a + b, 0);
   const html = `<section class="banner" id="endBanner"><span class="eyebrow">The end of the programme · ${dateOf(c.t)}</span>
     <h2>${e.b.fillLand && e.landFull ? `The land filled in ${((e.landFullAt - e.start) / YEAR).toFixed(1)} years; the last term ended ${years} years after the first request` : `The last term ended ${years} years after the first request`}</h2>
-    <p>${fails ? `<b>${fails} invariant checks failed.</b>` : `Every invariant held at all ${S.invChecks.toLocaleString("en-US")} checks.`} ${e.anomalies.length ? `${e.anomalies.length} calls reverted unexpectedly.` : "No call an actor expected to succeed reverted."} Nothing is left in the protocol but ${money(c.registryBal + c.bankBal + c.poolBal, 2)} USDT.</p>
+    <p>${fails ? `<b>${fails} invariant checks failed.</b>` : `Every invariant held at all ${S.invChecks.toLocaleString("en-US")} checks.`} ${e.anomalies.length ? `${e.anomalies.length} calls reverted unexpectedly.` : "No call an actor expected to succeed reverted."} Nothing is left in the protocol but ${money(c.registryBal + c.deedsBal + c.bankBal + c.poolBal, 2)} USDT.</p>
     <dl class="summary">
       ${item("Requests", rows.length.toLocaleString("en-US"))}${item("Terms completed", completed.toLocaleString("en-US"))}
       ${item("Ended early", (rows.length - completed).toLocaleString("en-US"))}${item("Land under covenant", hectares(land))}

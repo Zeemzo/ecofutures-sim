@@ -53,10 +53,14 @@ export type CountryConfig = {
   postSaleDays: number;
   baseFee: number;       // USDT; 0 = the protocol default V
   deskRate: number;      // USDT; 0 = V x 4/50
-  /** The execution allowance, on top of the fees: a fixed part and a part per hectare (USDT). It covers the duty,
-   *  signing and registration only; the Holder draws its costs and the rest goes back to the landowner. */
-  allowanceFixed: number;
-  allowancePerHa: number;
+  /** Fees 3-5 (TR3 Model B item 16, 20 Oct), USDT, paid upfront with the others and each paid out once its step is
+   *  done: the power's registration to the Holder (only where the flow has a power), the agreement's to the verifier
+   *  (only where it has an agreement to grant), and the covenant's -- fixed plus per hectare -- to the verifier at the
+   *  flow's last attestation. What a request does not use goes back to the landowner when it ends. */
+  powerFee: number;
+  agreementFee: number;
+  registrationFixed: number;
+  registrationPerHa: number;
   /** The simulated landowners' plots: most near the typical size, one in a hundred as large as the largest
    *  (log-normal), none below a tenth of the typical, and never above what the open edition allows. */
   typicalHa: number;
@@ -80,6 +84,8 @@ export type Behaviour = {
   accedePct: number;
   /** Percent of ended EFTs whose owner applies its Relic to a later EFT it owns. */
   relicUsePct: number;
+  /** Percent of blocks on a boosted EFT in which its owner ends the boost at once (Relic rules E6). */
+  releaseBoostPct: number;
   arrivalsPerYear: number;
   /** Stop admitting landowners when the last edition begins. */
   fillLand: boolean;
@@ -131,6 +137,10 @@ export type Behaviour = {
   /** Of the times the EFT's owner sees TR3 waiting in its pool, percent it claims; otherwise the pool grows, and a
    *  sale passes it to the buyer (R, 14 Oct). Every last owner claims at the End Date. */
   patronClaimPct: number;
+  /** Every holder claims its TR3 every this many days, as it accrues, so it is minted then: the landowner its own and
+   *  its referrer's share, the EFT's owner the patron's. 1 is every 24 hours (Azeem, 20 Oct); 0 leaves the claims to
+   *  re-verifications, the yearly round and the End Date (patronClaimPct). */
+  claimDays: number;
   payeeSwitchPermille: number;
   governanceCalendar: boolean;
 };
@@ -146,9 +156,10 @@ export type Scenario = {
 };
 
 export const FLOWS: FlowDef[] = [
-  { id: 1, name: "Path A under a power", steps: [Step.POWER, Step.POWER_ANCHOR, Step.DEED, Step.ATTEST, Step.MINT, Step.SALE] },
+  // the power, granted and registered, is one step: the Holder records it once registered (the team's call, 20 Oct)
+  { id: 1, name: "Path A under a power", steps: [Step.POWER, Step.DEED, Step.ATTEST, Step.MINT, Step.SALE] },
   { id: 2, name: "Path A", steps: [Step.DEED, Step.ATTEST, Step.MINT, Step.SALE] },
-  // path B as Ravi corrected it on 9 Oct: the Holder's power, the agreement to grant attested before the mint, the
+  // path B as FM v29 has it (13 Oct): no power; the agreement to grant recorded, not attested, before the mint; the
   // Deed recorded after the sale and attested
   { id: 3, name: "Path B: escrow until recorded", steps: [Step.AGREEMENT, Step.MINT, Step.SALE, Step.RECORDING, Step.ATTEST] },
 ];
@@ -156,7 +167,7 @@ export const FLOWS: FlowDef[] = [
 export const PRODUCTION: ContractConfig = {
   yearDays: 365, maxVerificationDelayDays: 14, acceptanceDays: 30, watchdogDays: 21, minAuctionDays: 3, kycDays: 1,
   reviewDays: 30, responseDays: 7, panelDays: 7, redrawDays: 7, haltAfter: 3,
-  powerDays: 14, anchoringDays: 14, attestationDays: 30, decisionDays: 3, gtaAttestFromDays: 21, guardianAnchorFromDays: 7,
+  powerDays: 30, anchoringDays: 14, attestationDays: 30, decisionDays: 3, gtaAttestFromDays: 21, guardianAnchorFromDays: 7,
   restoreDays: 60, damageDays: 14, firstClaimDays: 3, reseatDays: 30, accessionDays: 180,
   baseFee: 50, verifierPermille: 70, taxPermille: 30, foundationPermille: 10, editionScale: 100_000,
 };
@@ -188,14 +199,13 @@ export function validateFlow(steps: number[]): string[] {
   const e: string[] = [];
   const name = (s: number) => ["", "the power", "the power's registration", "an agreement", "a deed", "a recording", "an attestation", "the mint", "the sale"][s] ?? `step ${s}`;
   if (steps.length < 4 || steps.length > MAX_FLOW_STEPS) e.push(`It has ${steps.length} steps; a flow has 4 to ${MAX_FLOW_STEPS}.`);
-  let power = -1, mint = -1, anchored = false, deed = false;
+  let power = -1, mint = -1, deed = false;
   steps.forEach((st, i) => {
     const beforeMint = mint < 0;
     const next = steps[i + 1], prev = steps[i - 1];
     if (st === Step.MINT) {
       if (!beforeMint) e.push("It mints twice.");
       if (next !== Step.SALE) e.push("The mint must be followed at once by the sale.");
-      if (power >= 0 && !anchored) e.push("The power must be registered before the mint.");
       mint = i;
     } else if (st === Step.SALE) {
       if (prev !== Step.MINT) e.push("The sale must come straight after the mint.");
@@ -204,16 +214,13 @@ export function validateFlow(steps: number[]): string[] {
       if (!beforeMint) e.push("The power must come before the mint.");
       power = i;
     } else if (st === Step.POWER_ANCHOR) {
-      if (power < 0) e.push("The power's registration needs the power before it.");
-      else if (anchored) e.push("It registers the power twice.");
-      if (!beforeMint) e.push("The power must be registered before the mint.");
-      anchored = true;
+      e.push("The power's registration is no longer a step of its own: the Holder records the power once registered (20 Oct).");
     } else if (st === Step.ATTEST) {
       if (prev !== Step.AGREEMENT && prev !== Step.DEED && prev !== Step.RECORDING) e.push(`Attestation ${i + 1} attests nothing: it must follow an agreement, a deed or a recording.`);
     } else if (st === Step.AGREEMENT || st === Step.DEED || st === Step.RECORDING) {
       // flow B's agreement to grant is recorded, not attested: it may go straight to the mint (FM v29)
       if (next !== Step.ATTEST && !(st === Step.AGREEMENT && next === Step.MINT)) e.push(`${name(st)[0].toUpperCase()}${name(st).slice(1)} (step ${i + 1}) must be followed at once by an attestation${st === Step.AGREEMENT ? " or the mint" : ""}.`);
-      if (power >= 0 && !anchored) e.push("The power must be registered before any document.");
+      if (st === Step.AGREEMENT && next === Step.MINT && power >= 0) e.push("Under a power, the agreement must be attested before the mint.");
       if (st === Step.AGREEMENT && !beforeMint) e.push("An agreement must come before the mint.");
       if (st === Step.RECORDING && beforeMint) e.push("A recording comes after the sale; before the mint, use a deed.");
       if (st !== Step.AGREEMENT) deed = true;
@@ -244,9 +251,10 @@ export function toProduction(s: Scenario): string[] {
 }
 
 const country = (c: Partial<CountryConfig> & Pick<CountryConfig, "code" | "name" | "short" | "flowId">): CountryConfig => ({
-  // the allowance until counsel's figures for the duty are in: USD 30 for the notary and registration, and Sri Lanka's
-  // LC5 duty of 2 % of a USD 100/ha stated rental
-  minTerm: 3, maxTerm: 100, listingDays: LISTING_DAYS, postSaleDays: 0, baseFee: 0, deskRate: 0, allowanceFixed: 30, allowancePerHa: 2,
+  // fees 3-5 until counsel's figures are in (O1): USD 20 for the power's registration and for the agreement's, and for
+  // the covenant's USD 30 (the notary and the registry) plus Sri Lanka's LC5 duty, 2 % of a USD 100/ha stated rental
+  minTerm: 3, maxTerm: 100, listingDays: LISTING_DAYS, postSaleDays: 0, baseFee: 0, deskRate: 0,
+  powerFee: 20, agreementFee: 20, registrationFixed: 30, registrationPerHa: 2,
   typicalHa: 10, largestHa: 500, valuePerHaYear: 50,
   holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 25, ...c,
 });
@@ -269,7 +277,7 @@ export const KNOWN_COUNTRIES: Record<number, [string, string]> = {
 };
 
 export const DEFAULT_BEHAVIOUR: Behaviour = {
-  refusePct: 2, kycLatePct: 10, kycFailPct: 20, landSalePermille: 10, accedePct: 80, relicUsePct: 50,
+  refusePct: 2, kycLatePct: 10, kycFailPct: 20, landSalePermille: 10, accedePct: 80, relicUsePct: 50, releaseBoostPct: 50,
   termOptions: [15, 35, 20, 30], wrongBlockPct: 25,
   arrivalsPerYear: 20, fillLand: false, landGrowsWithEditions: false, arrivalYears: 15, maxRequests: 0, maxTermYears: 25,
   cancelPct: 2, claimLapsePct: 2, unclaimedPct: 3, rejectPct: 1, abandonPct: 2, preMintChallengePct: 14, unsoldPct: 4,
@@ -278,7 +286,7 @@ export const DEFAULT_BEHAVIOUR: Behaviour = {
   preMintOutcomes: [45, 30, 13, 12],
   termOutcomes: [50, 35, 8, 7],
   onTimePct: 90, littleLatePct: 7,
-  blockPermille: 15, cancelOfBlockPct: 25, resalePct: 4, patronClaimPct: 60, payeeSwitchPermille: 15,
+  blockPermille: 15, cancelOfBlockPct: 25, resalePct: 4, patronClaimPct: 60, claimDays: 1, payeeSwitchPermille: 15,
   governanceCalendar: true,
 };
 
@@ -324,8 +332,15 @@ export function cloneScenario(s: Scenario): Scenario {
   // anything added since: a 1.x country has no allowance, and a missing number reached the deploy as undefined
   c.behaviour = { ...DEFAULT_BEHAVIOUR, ...c.behaviour };
   c.contracts = { ...PRODUCTION, ...c.contracts };
-  c.countries = (c.countries ?? []).map((k) => country(k));
+  c.countries = (c.countries ?? []).map((k: any) => {
+    // before 20 Oct a country had an execution allowance, fixed + per hectare: it carries over as fee 5's (item 16)
+    const { allowanceFixed, allowancePerHa, ...rest } = k;
+    const was = allowanceFixed === undefined ? {} : { registrationFixed: allowanceFixed, registrationPerHa: allowancePerHa ?? 0 };
+    return country({ ...was, ...rest });
+  });
   if (!c.flows?.length) c.flows = clone(FLOWS);
+  // and a flow under a power listed its registration as a step of its own: it is part of the power now (20 Oct)
+  c.flows = c.flows.map((f) => ({ ...f, steps: f.steps.filter((x) => x !== Step.POWER_ANCHOR) }));
   return c;
 }
 
@@ -355,7 +370,7 @@ export function validate(s: Scenario): string[] {
     if (codes.has(k.code)) e.push(`Country ${k.code} appears twice.`);
     codes.add(k.code);
     if (!(k.code > 0 && k.code < 1000)) e.push(`${k.name}: the ISO numeric code must be 1-999.`);
-    for (const f of ["flowId", "minTerm", "maxTerm", "listingDays", "postSaleDays", "baseFee", "deskRate", "allowanceFixed", "allowancePerHa", "typicalHa", "largestHa", "valuePerHaYear", "holders", "orgsPerHolder", "verifiersPerOrg", "weight"] as const)
+    for (const f of ["flowId", "minTerm", "maxTerm", "listingDays", "postSaleDays", "baseFee", "deskRate", "powerFee", "agreementFee", "registrationFixed", "registrationPerHa", "typicalHa", "largestHa", "valuePerHaYear", "holders", "orgsPerHolder", "verifiersPerOrg", "weight"] as const)
       if (!Number.isFinite(k[f]) || k[f] < 0) e.push(`${k.name}: ${f} must be a number, 0 or more.`);
     if (!(k.typicalHa >= 0.01 && k.largestHa >= k.typicalHa)) e.push(`${k.name}: the typical plot must be at least 0.01 ha, and the largest at least the typical.`);
     if (k.minTerm < 3 || k.maxTerm > 100 || k.minTerm > k.maxTerm) e.push(`${k.name}: terms must run within 3-100 years, minimum first.`);
@@ -367,5 +382,6 @@ export function validate(s: Scenario): string[] {
     if (k.holders * k.orgsPerHolder < 2) e.push(`${k.name}: needs two verifier organisations before its first verification (Flow Map p6).`);
   }
   if (!s.countries.some((k) => k.weight > 0)) e.push("At least one country must receive arrivals.");
+  if (!(Number.isInteger(s.behaviour.claimDays) && s.behaviour.claimDays >= 0)) e.push("TR3 claims: a whole number of days, 0 or more.");
   return e;
 }

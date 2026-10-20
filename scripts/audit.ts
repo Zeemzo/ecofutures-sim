@@ -16,9 +16,10 @@
 // same-Trust-Admin reseat rule (gone: reseat-rule tests V12's); the term finding/inBreach of a verdict (the option alone
 // decides it now, see challenge-consequences); and the loose judgment/refund transactions of events-match-transfers
 // (JudgmentPaid names its voters and RequestEnded's refund goes to the request's guardian, so every payment is exact).
-import { readFileSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, mkdirSync, writeFileSync, existsSync, openSync, writeSync, closeSync } from "node:fs";
 import { decodeEventLog, decodeFunctionData, getAddress, getContractAddress, parseAbiItem, zeroAddress, type Abi, type Log } from "viem";
-import { loadDeployment, abis, bulk, addr, type Key } from "../src/chain";
+import { loadDeployment, abis, bulk, addr, decodeAt, readBulk, type Key } from "../src/chain";
+import code from "../src/bytecode.json";
 import { Step, CovenantStatus, BlockReason, Option, Holds, RequestStatus } from "../src/model";
 
 const NAME = process.env.NAME ?? "live";
@@ -46,9 +47,9 @@ const Z = zeroAddress.toLowerCase();
 const ZH = `0x${"0".repeat(64)}`;
 const keyOf = new Map<string, Key>();
 for (const k of Object.keys(abis) as Key[]) if (addr[k] && L(addr[k]) !== Z) keyOf.set(L(getAddress(addr[k])), k);
-// the contracts that hold money: the Registry (upfront), the Market (the price in escrow), the Bank (the term's
-// instalments) and EcoChallenge (the review pools)
-const protocol = new Set((["registry", "market", "bank", "challenge"] as Key[]).map((k) => L(getAddress(addr[k]))));
+// the contracts that hold money: the Registry (fees 1, 2 and 6), EcoDeeds (fees 3-5), the Market (the price in escrow),
+// the Bank (the term's instalments) and EcoChallenge (the review pools)
+const protocol = new Set((["registry", "deeds", "market", "bank", "challenge"] as Key[]).map((k) => L(getAddress(addr[k]))));
 
 // =====================================================================================
 // 1. Pull the chain
@@ -88,10 +89,9 @@ for (const l of raw) {
     } catch {}
     continue;
   }
-  try {
-    const d = decodeEventLog({ abi: abis[c], data: l.data, topics: l.topics as any, strict: false }) as any;
-    events.push({ block: N(l.blockNumber), tx: l.transactionHash!, i: N(l.logIndex), ord: N(l.blockNumber) * 100000 + N(l.logIndex), t: times.get(l.blockNumber!)!, c, name: d.eventName, a: d.args ?? {} });
-  } catch {}
+  // the merged build names one contract twice: its rulebook's events are `countries`', the rest `editions`'
+  const d = decodeAt(l.address, l.data, l.topics as any);
+  if (d) events.push({ block: N(l.blockNumber), tx: l.transactionHash!, i: N(l.logIndex), ord: N(l.blockNumber) * 100000 + N(l.logIndex), t: times.get(l.blockNumber!)!, c: d.contract, name: d.name, a: d.args });
 }
 events.sort((x, y) => x.ord - y.ord);
 console.log(`${events.length} protocol events, ${transfers.length} USDT transfers`);
@@ -100,6 +100,7 @@ console.log(`${events.length} protocol events, ${transfers.length} USDT transfer
 type Failed = { block: number; t: number; from: string; to: string; fn: string; expected: boolean };
 const failed: Failed[] = [];
 let txCount = 0;
+const lensCode = String((code as any).code.lens);
 const allAbi = Object.values(abis).flat() as Abi;
 for (let from = 1n; from <= last; from += 250n) {
   const nums: bigint[] = [];
@@ -109,10 +110,14 @@ for (let from = 1n; from <= last; from += 250n) {
   const txs = blocks.flatMap((b) => b.transactions.map((tx: any) => ({ tx, t: N(b.timestamp), block: N(b.number) })));
   txCount += txs.length;
   txs.forEach(({ tx, t, block }, i) => {
+    // EcoLens is in no directory: the app deploys it from its own creation code, which finds it here
+    if (!tx.to && receipts[i].contractAddress && L(addr.lens) === Z && String(tx.input).startsWith(lensCode)) addr.lens = getAddress(receipts[i].contractAddress!);
     if (receipts[i].status === "success") return;
     let fn = tx.input.slice(0, 10);
     try { fn = decodeFunctionData({ abi: allAbi, data: tx.input }).functionName; } catch {}
-    const target = keyOf.get(L(tx.to)) ?? tx.to;
+    let target = keyOf.get(L(tx.to)) ?? tx.to;
+    // the merged build's one contract at two names: a rulebook call is the rulebook's
+    if (target === "editions" && L(addr.countries) === L(addr.editions) && abis.countries.some((x) => x.type === "function" && x.name === fn)) target = "countries";
     // the simulation tries these knowing they may fail (Engine.attempt): an extra Council approval or country
     // vote, a panel member who already voted or whose vote came after the decision
     const expected = (target === "governance" && (fn === "approve" || fn === "voteCountry")) || (target === "challenge" && fn === "vote");
@@ -121,7 +126,12 @@ for (let from = 1n; from <= last; from += 250n) {
 }
 console.log(`${txCount} transactions, ${failed.length} failed (${failed.filter((f) => !f.expected).length} unexpected)`);
 
-writeFileSync(new URL("events.jsonl", OUT), events.map((e) => JSON.stringify(e, (_, v) => (typeof v === "bigint" ? v.toString() : v))).join("\n"));
+{
+  // line by line: a long run's events (millions, with daily TR3 claims) are past the longest string Node can build
+  const fd = openSync(new URL("events.jsonl", OUT), "w");
+  events.forEach((e, i) => writeSync(fd, (i ? "\n" : "") + JSON.stringify(e, (_, v) => (typeof v === "bigint" ? v.toString() : v))));
+  closeSync(fd);
+}
 writeFileSync(new URL("failed.jsonl", OUT), failed.map((f) => JSON.stringify(f)).join("\n"));
 
 /** D16: a covenant's block causes as Core keeps them (bits: 1 breach, 2 Deed off the register, 4 partition). */
@@ -170,7 +180,8 @@ const R = (tid: bigint) => `#${reqOfToken.get(tid) ?? "?"} (EFT ${tid})`;
 const sameSet = (a: string[], b: string[]) => JSON.stringify([...a].map(L).sort()) === JSON.stringify([...b].map(L).sort());
 
 // ---- the configuration the contracts run with, read from the chain ----
-const rd = (k: Key, fn: string, args: unknown[] = []) => bulk.readContract({ address: addr[k], abi: abis[k], functionName: fn, args, ...at }) as Promise<any>;
+// a view the merged build moved to EcoLens is read there (chain.route)
+const rd = (k: Key, fn: string, args: unknown[] = []) => readBulk(k, fn, args, at.blockNumber) as Promise<any>;
 const [coreClocks, deedClocks, partyClocks] = await Promise.all([rd("core", "clocks"), rd("deeds", "clocks"), rd("parties", "clocks")]);
 const cfg = Object.fromEntries(await Promise.all(([
   ["year", "core", "yearLength"], ["maxDelay", "core", "maxVerificationDelay"], ["acceptance", "registry", "acceptanceWindow"],
@@ -227,8 +238,10 @@ const limitOf = (n: number) => 10_000n * fib(n);
 // =====================================================================================
 
 // Money: the upfront payment
-const upCons = check("upfront-conservation", "Money", "What the landowner paid at the request (verification fee + attestation fee + judgment fee + execution allowance) = what was paid out of it + what the Registry still holds for it; each refund is exactly what was left", "FM p9; D10; EcoRegistry._finish");
-const upParts = check("upfront-parts", "Money", "Each part goes out whole, once, to its payee: the verification fee to the request's verifier at the first attestation (flow B: at the mint; or a refusal or abandonment), less a corrected Deed's second signing; the judgment fee to the watchdog judges who voted, or else to the verifier; the attestation fee to the attester of the flow's last document; the allowance only to the request's Holder, never more than it", "FM p8-9; D10, D12; EcoRegistry._payShare, _payVerifier, onAttested, _payJudgment, payAllowance");
+const upCons = check("upfront-conservation", "Money", "What the landowner paid at the request (the verification, attestation and judgment fees, and fees 3-5) = what was paid out of it + what the Registry and EcoDeeds still hold for it; each refund is exactly what was left", "FM p9; TR3 Model B item 16; EcoRegistry._finish; EcoDeeds.refundFees");
+const upParts = check("upfront-parts", "Money", "Each part goes out whole, once, to its payee: the verification fee to the request's verifier at the first attestation (flow B: at the mint; or a refusal or abandonment), less a corrected Deed's second signing, which goes to the request's Holder; the judgment fee to the watchdog judges who voted, or else to the verifier; the attestation fee to the attester of the flow's last document", "FM p8-9; EcoRegistry._payShare, _payVerifier, onAttested, _payJudgment, paySecondSigning");
+const paperF = check("paper-fees", "Money", "Fees 3-5 are each paid whole, once, at their step: fee 3 to the Holder that records the registered power, fee 4 to the verifier as the agreement to grant is recorded, fee 5 to the verifier at the flow's last attestation. What a request did not use goes back to its landowner, and only once the request has ended; a completed request has used all it was charged", "TR3 Model B item 16 (20 Oct); EcoDeeds.anchorPower, recordDocument, attest, refundFees");
+const forf = check("stale-forfeit", "Money", "A sale called off for a failed or timed-out identity check refunds the winner 99% of its price and sends the 1% (rounded down) to the covenant's review pool, in the same transaction", "TR3 Model B item 3 (20 Oct); EcoMarket.cancelStaleSale; EcoBank.forfeitToPool");
 // Money: the sale and the term
 const saleCons = check("sale-conservation", "Money", "Sale price = review pool + every instalment released + payouts to the patron + an End Date's held payout + balance still held", "FM p9; EcoBank");
 const bankRep = check("bank-replay", "Money", "Each account replayed from its events (balance, instalments released, years of consideration paid, holds) is the account the Bank holds now", "EcoBank");
@@ -241,8 +254,8 @@ const hfee = check("holder-fee", "Money", "The Holder's share goes to the covena
 const poolC = check("pool-conservation", "Money", "A review pool's funding = what it paid out + what it still holds", "FM p17; EcoChallenge");
 const winFee = check("window-fee", "Money", "An attested review window that covered a new interval pays its attester one act's fee (the pool / the term's acts) when it settles; an unattested, off-schedule or forfeited (3A upheld) window pays nothing", "FM p17; EcoChallenge._settle; build notes (off-schedule windows carry no fee)");
 const chFee = check("challenge-fee-split", "Money", "A decided term challenge is paid one act's fee: 40% shared equally by the judges who voted, and when upheld the other 60% to the challenger; a lapse pays the judges who voted their 40%; a withdrawal pays nothing. A watchdog challenge pays its judges the judgment fee, the first voter the remainder; with no voter it stays for the verifier", "FM p15-17; EcoChallenge._payChallenge, _close; EcoRegistry._payJudgment");
-const sweep = check("pool-sweep", "Money", "What a pool still holds after the End Date goes, whole, to the landowner (or to the EFT's owner when the covenant was cancelled), and only after it", "EcoChallenge.sweepReviewPool");
-const evTr = check("events-match-transfers", "Money", "In every transaction, what the payment events say each party received = the USDT the protocol (Registry, Market, Bank, EcoChallenge) actually transferred to it", "Every payment event");
+const sweep = check("pool-sweep", "Money", "What a pool still holds after the End Date goes, whole, to the landowner (or to the EFT's owner when the covenant was cancelled in its term), and only after it; a covenant that never sold (closed unsold, lapsed, or cancelled before its sale) holds only forfeits, which go to the landowner", "EcoChallenge.sweepReviewPool; TR3 Model B item 3");
+const evTr = check("events-match-transfers", "Money", "In every transaction, what the payment events say each party received = the USDT the protocol (Registry, EcoDeeds, Market, Bank, EcoChallenge) actually transferred to it", "Every payment event");
 // TR3
 const trSplit = check("tr3-split", "TR3", "Of everything a covenant has released: the patron's 90% and the landowner's 10% (a referrer taking 30% of it) are what has been claimed plus what is claimable; and the claim events add up to what Tree says was paid", "Tree._due; GUARDIAN_PERCENT, REFERRAL_PERCENT_OF_GUARDIAN");
 const trRef = check("tr3-referrer", "TR3", "A referrer who is a GTA, or the land's own verifier, when the claim is made takes nothing; its share stays with the landowner. Anyone else is paid", "Tree._referrerEligible (R, 18 Oct, R4: anyone except a Council member or whoever scores that land)");
@@ -251,20 +264,22 @@ const rsClaim = check("resale-claims", "Resale", "The patron's TR3 is minted onl
 const rsOrd = check("resale-orders", "Resale", "Every resale takes a live order at its price: a listing or an offer made at the EFT's order counter in force, an offer before its expiry", "R, 14 Oct, Part 1 items 4 and 6; EcoFuturesToken.buy, acceptOffer");
 const trSup = check("tr3-supply", "TR3", "TR3's supply = everything the claim events minted = minted to patrons + guardians + referrers", "Tree");
 const plc = check("edition-placement", "Editions", "Each paid request takes its place at sign-up, wholly, in the OPEN edition -- never a SETTLING one -- within its limit (100 x F ha-yr); a land that does not fit the room left goes to the next edition, which opens; only the 21st's last land takes less than it asked (the room left)", "R, 13 Oct, section 3.1 (D17, D1); EcoEditions.reserve")
-const cls = check("edition-close", "Editions", "Editions open one at a time: the next when the OPEN one becomes SETTLING (its room fully placed, or a land overflowing it; its room kept) or closes; each closes only when all its room is sold, or 8 protocol years after it opened (in the year in force then), when what no request placed is burned", "R, 13 Oct, sections 3.1-3.2, fix 11; EcoEditions._settle, _close, _roll")
+const cls = check("edition-close", "Editions", "Editions open one at a time: the next when the OPEN one becomes SETTLING (its room fully placed, or a land overflowing it; its room kept) or closes; each closes only when all its room is sold, or when its clock runs out (8 protocol years for every edition, in the year in force when it opened), when the TR3 of what no request placed goes to the Overcharge Reserve", "R, 13 Oct, sections 3.1-3.2, fix 11; TR3 Model B item 7 (20 Oct); Relic rules E4; EcoEditions._settle, _close, _roll")
 const edState = check("edition-state", "Editions", "The editions replayed from the events end where EcoEditions is now: each edition's placed and sold land-years, its state and when it opened, and the OPEN edition", "EcoEditions.editionOf, current, currentEdition")
-const plRel = check("place-released", "Editions", "A place is released exactly when its request ends without a sale (cancelled, rejected, failed, refused, lapsed, unsold...): its room returns to its edition while it has not closed, else is burned, and nothing is credited to the Reserve; a sold land is never released", "R, 13 Oct, section 3.6; EcoEditions.release; EcoRegistry._finish")
+const plRel = check("place-released", "Editions", "A place is released exactly when its request ends without a sale (cancelled, rejected, failed, refused, lapsed, unsold...): its room returns to its edition while it has not closed, else its TR3 goes to the Overcharge Reserve; a sold land is never released", "R, 13 Oct, section 3.6; Relic rules E4; EcoEditions.release; EcoRegistry._finish")
+const e4 = check("unplaced-to-reserve", "Editions", "The TR3 of room an edition never placed -- what a close leaves, or a place released or promoted out of a closed edition -- is credited to the Overcharge Reserve in the same transaction (burned only once the Reserve is finalised)", "Relic rules E4 (final note of 19 Oct, 13); EcoEditions._credit; Tree.creditUnplaced")
 const qMove = check("queue-promotion", "Editions", "Free room goes, in queue order, to the earliest waiting request in a higher edition that fits it: every move is down, of a waiting (unfixed) place, into an edition not closed whose room and limit it fits, with no earlier waiting request in any edition above it that fits", "R, 13 Oct, section 3.3; EcoEditions.promote")
 const qFix = check("edition-fixed", "Editions", "A place is fixed only when its auction ends with a winner, and unfixed only when that sale is called off (a failed KYC; path B's lapse to relist), the place kept; a fixed place never moves", "R, 13 Oct, section 3.4; EcoMarket.settleAuction, cancelStaleSale, refundSale")
 const asg = check("edition-assignment", "Editions", "Each covenant activates in the edition fixed at its auction, sold there with its land-years at that edition's rate (capped at 1,000,000, the excess burned)", "R, 13 Oct, section 3.5; EcoEditions.sell; Tree.assignEdition")
 const qAssign = check("verifier-assigned", "Requests", "A request no verifier claimed is assigned by an active Holder of its country, to one of its own verifiers, only after 30 days unclaimed (and any first claim over); by the Council only after 60; no request is ever ended for want of a verifier", "R, 13 Oct, section 4.1-4.3; EcoParties.assignVerifier, reassignVerifier")
 const qReject = check("rejection", "Requests", "A rejection is filed by the claiming verifier inside its claim, with a reason (land not found, no valid title, no access given) and evidence; it ends the request only after the watchdog has closed with no challenge open, the verification fee to the verifier and the rest refunded; an upheld 1A reopens it", "R, 13 Oct, section 4.4; EcoParties.rejectRequest; EcoRegistry.cancelRequest")
 const rew = check("tr3-reward", "TR3", "Each covenant's stream starts with its sale's allocation (TR3 at a score of 100), at the covenant's score", "Tree.startReward; TR3 model v6");
-const relScore = check("tr3-release-score", "TR3", "Each release is at the score in force since the last (at the new score when the release lifts a 3B hold), and the score's shortfall goes to the Reserve: released = floor((released + credited) x score / 100)", "Tree._settle, pass; addendum (ECOSCORE source); FM p16 (3B back-paid at the corrected score)");
+const relScore = check("tr3-release-score", "TR3", "TR3 streams forward (C9): outside a verification it settles at the score in force, never past the horizon the last verification underwrote and never while stopped; a verification settles what it underwrote at the old score, then the rest -- late days, or what a stop held -- at the score it records; the score's shortfall goes to the Reserve: released = floor((released + credited) x score / 100)", "R, 18-19 Oct, C9; Tree._settle, _sync, pass; addendum (ECOSCORE source); FM p16 (3B back-paid at the corrected score)");
+const hzn = check("tr3-horizon", "TR3", "Each verification underwrites the interval after it: the stream may run to the earlier of one interval after it and the next scheduled due date (the term's end after the last); at the activation, one interval after the verification before the sale, never past the first due date. The confirmed record is the land TR3 released so far, boosts excluded", "R, 18-19 Oct, C9; Relic rules E5; Tree.startReward, pass, _nextHorizon");
 const strCons = check("tr3-stream-conservation", "TR3", "Every allocation is accounted exactly: what was released + what was credited to the Reserve (score shortfall, late days, holds, an early end, an acquired part) = the allocation once the stream ends, and never more before", "Tree._settle, _end, endPart; addendum");
 const late = check("late-verification", "TR3", `A re-verification is late only past its due date + the grace (${days(cfg.maxDelay)}): it records when it fell overdue, and nothing of its TR3 is forfeited -- only the score's shortfall goes to the Reserve (R, 18 Oct, C9)`, "D3; Core.verify; Tree._settle");
 const brk = check("tr3-supply-breakdown", "TR3", "Every TR3 of the 210,000,000 is minted, owed, in the Reserve, committed to a boost, streaming, unsold or burned: each part as the events give it, and the unallocated remainder within rounding dust of the space not yet sold", "Tree.supplyBreakdown; EcoEditions.unallocatedTR3; addendum point 6");
-const ovc = check("overcharge", "TR3", "A Relic's cap is the land TR3 its source released (boosts excluded), minted only for a covenant that reached its End Date; transmutation sums two same-edition caps an edition lower; a boost's multiplier is F(target) / F(Relic) and its commit the least of the remaining allocation x (M - 1), the cap and the Reserve; each release pays it x (M - 1) from the commit, and what is left returns at the end", "addendum; EcoOvercharge; Tree.commitBoost, _boost, _end");
+const ovc = check("overcharge", "TR3", "A Relic's cap is its source's confirmed record (the land TR3 a verification confirmed, boosts excluded), minted only for a covenant that reached its End Date; it falls by each commit, and is burned at zero or when retired. A boost applies only in the target's first interval, with m = min(F(t)/F(r) - 1, F(t)^2/F(t-1)^2 - 1); its commit is the least of the allocation not yet streamed x m, the Relic's cap, the edition's share of the Reserve left (F(t)^2 / (F21 x F22) of everything credited, less what it drew) and the Reserve; each release pays it x m from the commit. What it has not paid when the stream ends, a part is acquired or its owner ends it in a block returns to the Reserve and the edition's share, its cap as a Relic of the spending Relic's edition (none below 1 TR3); transmutation sums two same-edition caps an edition lower", "Relic rules E1-E6 (final note of 19 Oct, 13); EcoOvercharge; Tree.commitBoost, _boost, _returnBoost, shareLeft");
 const land = check("land-at-request", "Editions", "Every request's land is at least 100 m2 and fits some edition: at most 100 x F21 hectare-years", "TR3 model v6; EcoEditions.reserve");
 const term = check("term-at-request", "Editions", "Every request's term is within its country's range and 3-100 years", "EcoCountries.requestTerms; EcoEditions.reserve");
 // Timing and the term
@@ -293,7 +308,7 @@ const firstClaim = check("first-claim", "Requests", "A request reopened by W1A i
 const paper = check("deeds-clocks", "Paper", "Before the sale each document is recorded, and attested, inside its clock (anchoring, attestation: from when the step became current, with the extensions granted, silence counting as granted after the decision window); a request lapses only after its clock; the landowner anchors only from its day", "FM p12-13; D8; EcoDeeds._deadline, recordDocument, attest, lapse");
 const gtaA = check("gta-attest-from", "Paper", `Every attester is independent: a verifier of the country from another organisation than the land's verifier, a Trust Admin of the country other than the land's, or a GTA -- a document from ${days(cfg.gtaFrom)} after it was recorded, a review window from seven tenths of it`, "FM p12, p17; EcoDeeds._requireAttester; EcoChallenge._eligibleAttester");
 // the configuration, enforced
-const fees = check("upfront-fees", "Configuration", "Each request's upfront is the fee model's for its land and its country's fees at the time: V x (1 + sqrt ha), V, D x (1.5 + sqrt ha), and the allowance fixed + per ha x ha", "FM p9; D12; EcoCountries.quote");
+const fees = check("upfront-fees", "Configuration", "Each request's upfront is the fee model's for its land and its country's fees at the time: V x (1 + sqrt ha), V, D x (1.5 + sqrt ha); and fees 3-5: P only where the flow has a power, A only where it has an agreement to grant, C0 + C1 x ha", "FM p9; TR3 Model B item 16; EcoCountries.quote");
 const floorC = check("price-floor", "Configuration", "No auction starts below the covenant's yearly price floor, max(J x years x 100, C x (years + 1) / 0.9); one at the twice-a-year cadence clears the twice-a-year floor too", "FM v29 Money; D14; EcoMarket.listForAuction; EcoFees.priceFloor");
 const termC = check("term-length", "Configuration", `Each term runs exactly its Stated Period: years x the protocol year (${days(cfg.year)})`, "Core.activate");
 const cad = check("instalment-schedule", "Configuration", "Each sale is paid twice a year only when its price reaches both USD 500 x (2T + 1) and the twice-a-year floor, else yearly: interval = year / releases a year, years x that many instalments after the first, the first taking the division's remainder", "FM p9; D14; EcoBank._openAccount");
@@ -307,7 +322,7 @@ const pst = check("post-sale-window", "Configuration", "A path B sale completes 
 const flw = check("flow-order", "Configuration", "Every request walks its country's flow, step by step, in order", "EcoCountries flows; FlowCode");
 
 // ---- the chronological replay: the protocol's state at each event, and every check that needs it ----
-type Fees = { baseFee: bigint; deskRate: bigint; allowanceFixed: bigint; allowancePerHa: bigint };
+type Fees = { baseFee: bigint; deskRate: bigint; powerFee: bigint; agreementFee: bigint; registrationFixed: bigint; registrationPerHa: bigint };
 type Settings = { flowId: number; min: number; max: number; listing: number; postSale: number };
 const countries = new Map<number, { settings: Settings; fees: Fees }>();
 const flows = new Map<number, number[]>();
@@ -345,7 +360,10 @@ const isFrozen = (h: string) => !!holders.get(L(h))?.frozen;
 type Ext = { granted: number; askedAt: number };
 type Req = {
   rid: number; guardian: string; country: number; units: bigint; term: number; flowId: number; steps: number[];
-  vf: bigint; af: bigint; jf: bigint; al: bigint; left: { share: bigint; att: bigint; jud: bigint; al: bigint };
+  vf: bigint; af: bigint; jf: bigint; paper: bigint; pf: bigint; gf: bigint; rf: bigint;
+  left: { share: bigint; att: bigint; jud: bigint; p: bigint; g: bigint; r: bigint };
+  /** Fees 3-5 as the model gives them for this request, checked against EcoDeeds' FeesHeld. */
+  wantPaper: [bigint, bigint, bigint];
   shareTaken: boolean; judgmentSettled: boolean; status: number; verifier: string; claimedAt: number; verifiedAt: number;
   cursor: number; stepAt: number; ext: Map<number, Ext>; before?: { stepAt: number; cursor: number; ext: Map<number, Ext> };
   saleAt: number; listing: number; postSale: number; firstClaimant: string; firstClaimUntil: number; barred: string;
@@ -369,7 +387,12 @@ type Acct = { price: bigint; pool: bigint; balance: bigint; per: bigint; total: 
   consPer: bigint; consYears: number; consPart: bigint; shareToPatron: boolean; first: bigint; consPaid: bigint; verifierPaid: bigint; splitAt: number; closedHeld: bigint; split0: typeof split };
 const accts = new Map<bigint, Acct>();
 type Stream = { alloc: bigint; edition: number; score: number; rescore: boolean; ended: boolean; stream: bigint; credits: bigint;
-  mE6: bigint; left: bigint };
+  mE6: bigint; left: bigint;
+  /** C9: where the stream stands (the last release's end), how far the last verification underwrote it, whether it is
+   *  stopped (a block or an upheld 3B), and the confirmed record (E5). */
+  mark: number; horizon: number; held: boolean; confirmed: bigint;
+  /** The edition of the Relic that boosted it: a returned cap is a Relic of it (E6). */
+  boostEdition: number };
 const streams = new Map<bigint, Stream>();
 type Win = { openedAt: number; closesAt: number; attestor: string; index: number; through: number; forfeited: boolean; settled: boolean };
 type Pool = { pool: bigint; fee: bigint; funded: number; opened: number; win?: Win; runs: number; lastAttester: string; fundedAmount: bigint; paid: bigint; attPay?: bigint; attPayBefore?: bigint };
@@ -399,11 +422,26 @@ const orderCounter = new Map<bigint, number>();
 const resaleListings = new Map<bigint, { counter: number; price: bigint }>();
 const resaleOffers = new Map<string, { counter: number; price: bigint; expiry: number }>();
 // the edition model, replayed: the OPEN edition; each edition's 8 years in the year in force when it opened
-// each edition's clock: 8 years for editions 1-16, then F(n - 10) -- 13, 21, 34, 55, 89 (R, 18 Oct, C10)
-const clockOf = (n: number) => (n > 16 ? Number(fib(n - 10)) : 8) * cfg.year;
+// each edition's clock: 8 years, for every edition (TR3 Model B item 7, 20 Oct: the 13-89-year table is withdrawn)
+const clockOf = (_n: number) => 8 * cfg.year;
 let ed = 1;
-let capBurn = 0n, closesCount = 0, moves = 0, fixes = 0, unfixes = 0, edBurn = 0n;
+let capBurn = 0n, closesCount = 0, moves = 0, fixes = 0, unfixes = 0;
 let reserveEv = 0n, committedEv = 0n, releasedEv = 0n, burnedEv = 0n, claimedEv = 0n;
+// E3: everything ever credited to the Reserve (a returned boost is no credit), and what each edition has drawn
+let reserveCreditedEv = 0n, reserveFinalizedEv = false;
+const drawnBy: bigint[] = Array(LAST_EDITION + 2).fill(0n);
+const F21_F22 = 10_946n * 17_711n;
+const shareLeftOf = (n: number) => { const lim = (reserveCreditedEv * fib(n) * fib(n)) / F21_F22; return lim > drawnBy[n] ? lim - drawnBy[n] : 0n; };
+/** E2: the lift a Relic of edition r gives land of edition t, x 1e6 -- at most one edition (EcoOvercharge.lift). */
+const liftOf = (t: number, r: number) => {
+  if (t < 3 || t > LAST_EDITION || r === 0 || r >= t) return 0n;
+  const ft = fib(t), fp = fib(t - 1);
+  const byRelic = (ft * 1_000_000n) / fib(r) - 1_000_000n, oneStep = (ft * ft * 1_000_000n) / (fp * fp) - 1_000_000n;
+  return byRelic < oneStep ? byRelic : oneStep;
+};
+/** E4: by transaction, the TR3 of unplaced room the editions' events say goes to the Reserve, and what Tree credited. */
+const unplacedDue = new Map<string, bigint>(), unplacedCredited = new Map<string, bigint>();
+const addTo = (m: Map<string, bigint>, k: string, v: bigint) => m.set(k, (m.get(k) ?? 0n) + v);
 const claims = new Map<bigint, { p: bigint; g: bigint; r: bigint }>();
 // the payments each transaction's events report, by recipient
 const evTx = new Map<string, Map<string, bigint>>();
@@ -497,7 +535,10 @@ for (const e of events) {
     case "countries.CountryEnabled": case "countries.SettingsApplied": case "countries.CountryFeesSet": {
       const x = countries.get(N(a.country));
       const s = a.settings ? { flowId: N(a.settings.flowId), min: N(a.settings.minTermYears), max: N(a.settings.maxTermYears), listing: N(a.settings.listingWindow), postSale: N(a.settings.postSaleWindow) } : x!.settings;
-      const f = a.fees ? { baseFee: B(a.fees.baseFee), deskRate: B(a.fees.deskRate), allowanceFixed: B(a.fees.allowanceFixed), allowancePerHa: B(a.fees.allowancePerHa) } : x!.fees;
+      const f = a.fees ? {
+        baseFee: B(a.fees.baseFee), deskRate: B(a.fees.deskRate), powerFee: B(a.fees.powerFee), agreementFee: B(a.fees.agreementFee),
+        registrationFixed: B(a.fees.registrationFixed), registrationPerHa: B(a.fees.registrationPerHa),
+      } : x!.fees;
       countries.set(N(a.country), { settings: s, fees: f });
       break;
     }
@@ -557,17 +598,21 @@ for (const e of events) {
       const units = B(a.landUnits), years = N(a.termYears);
       const r: Req = {
         rid, guardian: L(a.guardian), country, units, term: years, flowId: st.settings.flowId, steps: flows.get(st.settings.flowId) ?? [],
-        vf: B(a.verificationFee), af: B(a.attestationFee), jf: B(a.judgmentFee), al: B(a.allowance),
-        left: { share: B(a.verificationFee), att: B(a.attestationFee), jud: B(a.judgmentFee), al: B(a.allowance) },
+        vf: B(a.verificationFee), af: B(a.attestationFee), jf: B(a.judgmentFee), paper: B(a.registrationFees), pf: 0n, gf: 0n, rf: 0n,
+        left: { share: B(a.verificationFee), att: B(a.attestationFee), jud: B(a.judgmentFee), p: 0n, g: 0n, r: 0n }, wantPaper: [0n, 0n, 0n],
         shareTaken: false, judgmentSettled: false, status: RequestStatus.OPEN, verifier: Z, claimedAt: 0, verifiedAt: 0,
         cursor: 0, stepAt: 0, ext: new Map(), saleAt: 0, listing: st.settings.listing, postSale: st.settings.postSale,
         firstClaimant: Z, firstClaimUntil: 0, barred: Z, recordedAt: new Map(), ended: false, openedAt: t, rejected: false,
       };
       reqs.set(rid, r);
       const f = st.fees, v = vOf(f), d = dOf(f);
-      const want = [(v * scaleFor(units)) / WAD, v, reviewFeeOf(units, d), f.allowanceFixed + (f.allowancePerHa * units) / 100n];
-      fees.test(r.vf === want[0] && r.af === want[1] && r.jf === want[2] && r.al === want[3], `#${rid}`,
-        () => `paid ${[r.vf, r.af, r.jf, r.al].map(usd).join(" / ")}; the model gives ${want.map(usd).join(" / ")}`);
+      const want = [(v * scaleFor(units)) / WAD, v, reviewFeeOf(units, d)];
+      // fees 3-5 (item 16): the power's only where the flow has a power, the agreement's only where it has an agreement
+      r.wantPaper = [r.steps.includes(Step.POWER) ? f.powerFee : 0n, r.steps.includes(Step.AGREEMENT) ? f.agreementFee : 0n,
+        f.registrationFixed + (f.registrationPerHa * units) / 100n];
+      const wantPaper = r.wantPaper[0] + r.wantPaper[1] + r.wantPaper[2];
+      fees.test(r.vf === want[0] && r.af === want[1] && r.jf === want[2] && r.paper === wantPaper, `#${rid}`,
+        () => `paid ${[r.vf, r.af, r.jf, r.paper].map(usd).join(" / ")}; the model gives ${[...want, wantPaper].map(usd).join(" / ")}`);
       // the land fits some edition, and the term the country's range (V12.1: the queue picks the edition, rule 1)
       land.test(units >= 1n && units * BigInt(years) <= limitOf(LAST_EDITION), `#${rid}`, () => `${N(units) / 100} ha for ${years} years`);
       term.test(years >= st.settings.min && years <= st.settings.max && years >= 3 && years <= 100, `#${rid}`, () => `${years} years in ${country}: range ${st.settings.min}-${st.settings.max}`);
@@ -664,25 +709,56 @@ for (const e of events) {
       r.left.jud = 0n;
       break;
     }
-    case "registry.AllowanceDrawn": {
-      const r = reqs.get(N(a.requestId))!, amt = B(a.amount);
-      pay(e.tx, a.holder, amt);
-      // in the flow -- open once the watchdog closed, entered or not (D8)
-      const inFlow = r.status === RequestStatus.IN_FLOW || (r.status === RequestStatus.VERIFIED && t > r.verifiedAt + cfg.watchdog);
-      // a corrected Deed's second signing is drawn from the verifier's unpaid fee, not the allowance (FM v29 P2)
-      const second = inTx(e, "deeds.SecondSigningReceipts", (x) => N(x.a.requestId) === r.rid).length > 0;
-      const left = second ? r.left.share : r.left.al;
-      upParts.test(amt <= left && L(a.holder) === holderOf(r.verifier) && inFlow, `#${r.rid}`,
-        () => `${short(a.holder)} drew ${usd(amt)} of ${usd(left)} left${second ? " of the verification fee" : ""}; the request's Holder is ${short(holderOf(r.verifier))}`);
-      if (second) { r.left.share -= amt; r.vf -= amt; } else r.left.al -= amt;
+    case "deeds.FeesHeld": {
+      const r = reqs.get(N(a.requestId))!, got: [bigint, bigint, bigint] = [B(a.powerFee), B(a.agreementFee), B(a.registrationFee)];
+      fees.test(got.every((x, k) => x === r.wantPaper[k]) && got[0] + got[1] + got[2] === r.paper, `#${r.rid}`,
+        () => `EcoDeeds holds ${got.map(usd).join(" / ")} of ${usd(r.paper)}; the model gives ${r.wantPaper.map(usd).join(" / ")}`);
+      [r.pf, r.gf, r.rf] = got;
+      r.left.p = got[0]; r.left.g = got[1]; r.left.r = got[2];
+      break;
+    }
+    case "deeds.FeePaid": {
+      const r = reqs.get(N(a.requestId))!, amt = B(a.amount), fee = N(a.fee), to = L(a.to);
+      pay(e.tx, a.to, amt);
+      let why = "";
+      if (fee === 3) {
+        const anchor = inTx(e, "deeds.PowerAnchored", (x) => N(x.a.requestId) === r.rid)[0];
+        if (!anchor) why = "fee 3 with no power recorded";
+        else if (to !== L(anchor.a.holder) || to !== holderOf(r.verifier)) why = `fee 3 to ${short(to)}; the Holder that recorded the power is ${short(anchor.a.holder)}`;
+        else if (amt !== r.left.p) why = `fee 3 of ${usd(amt)}; ${usd(r.left.p)} was held`;
+        r.left.p = 0n;
+      } else if (fee === 4) {
+        const doc = inTx(e, "deeds.DocumentRecorded", (x) => N(x.a.requestId) === r.rid && N(x.a.step) === Step.AGREEMENT && !x.a.replaced);
+        if (!doc.length) why = "fee 4 with no agreement recorded";
+        else if (to !== r.verifier) why = `fee 4 to ${short(to)}, not the verifier ${short(r.verifier)}`;
+        else if (amt !== r.left.g) why = `fee 4 of ${usd(amt)}; ${usd(r.left.g)} was held`;
+        r.left.g = 0n;
+      } else if (fee === 5) {
+        const lastAttest = r.steps.lastIndexOf(Step.ATTEST);
+        const att = inTx(e, "deeds.DocumentAttested", (x) => N(x.a.requestId) === r.rid && N(x.a.index) + 1 === lastAttest);
+        if (!att.length) why = "fee 5 not at the flow's last attestation";
+        else if (to !== r.verifier) why = `fee 5 to ${short(to)}, not the verifier ${short(r.verifier)}`;
+        else if (amt !== r.left.r) why = `fee 5 of ${usd(amt)}; ${usd(r.left.r)} was held`;
+        r.left.r = 0n;
+      } else why = `fee ${fee}`;
+      paperF.test(why === "", `#${r.rid}`, () => why);
+      break;
+    }
+    case "deeds.FeesRefunded": {
+      const r = reqs.get(N(a.requestId))!, amt = B(a.amount), left = r.left.p + r.left.g + r.left.r;
+      pay(e.tx, a.guardian, amt);
+      paperF.test(r.ended && L(a.guardian) === r.guardian && amt === left, `#${r.rid}`,
+        () => `refunded ${usd(amt)} to ${short(a.guardian)}${r.ended ? "" : " before the request ended"}; ${usd(left)} was left`);
+      upCons.test(amt === left, `#${r.rid}`, () => `fees 3-5 refunded ${usd(amt)}; ${usd(left)} was left`);
+      r.left.p = 0n; r.left.g = 0n; r.left.r = 0n;
       break;
     }
     case "registry.RequestEnded": {
       const r = reqs.get(N(a.requestId))!, refund = B(a.refund);
       pay(e.tx, r.guardian, refund);
-      const left = r.left.share + r.left.att + r.left.jud + r.left.al;
+      const left = r.left.share + r.left.att + r.left.jud;
       upCons.test(refund === left, `#${r.rid}`, () => `refunded ${usd(refund)}; ${usd(left)} was left`);
-      r.left = { share: 0n, att: 0n, jud: 0n, al: 0n };
+      r.left.share = 0n; r.left.att = 0n; r.left.jud = 0n;
       if (N(a.reason) === 11) qReject.test(r.rejected && r.status === RequestStatus.VERIFIED && t > r.verifiedAt + cfg.watchdog && r.shareTaken, `#${r.rid}`,
         () => `ended rejected ${date(t)}: rejection filed ${r.rejected}, verified ${date(r.verifiedAt)}, verifier paid ${r.shareTaken}`);
       r.status = RequestStatus.ENDED; r.ended = true;
@@ -737,11 +813,15 @@ for (const e of events) {
       break;
     }
     case "deeds.SecondSigningReceipts": {
+      // a corrected Deed's second signing, paid by the Registry from the verifier's unpaid fee (FM v29 P2)
       const r = reqs.get(N(a.requestId))!, amt = B(a.amount), k = r.correction;
-      // the fee as it stood before this draw (the AllowanceDrawn before it took the amount off r.vf)
-      second.test(!!k && k.by === r.verifier && !k.drawn && amt * 2n <= r.vf + amt, `#${r.rid}`,
-        () => `drew ${usd(amt)}: ${!k ? "no correction" : k.by !== r.verifier ? `the correction was ${short(k.by)}'s, not the verifier's` : k.drawn ? "a second draw" : `over half of ${usd(r.vf + amt)}`}`);
+      pay(e.tx, a.holder, amt);
+      second.test(!!k && k.by === r.verifier && !k.drawn && amt * 2n <= r.left.share, `#${r.rid}`,
+        () => `drew ${usd(amt)}: ${!k ? "no correction" : k.by !== r.verifier ? `the correction was ${short(k.by)}'s, not the verifier's` : k.drawn ? "a second draw" : `over half of ${usd(r.left.share)}`}`);
+      upParts.test(amt <= r.left.share && L(a.holder) === holderOf(r.verifier), `#${r.rid}`,
+        () => `${short(a.holder)} drew ${usd(amt)} of ${usd(r.left.share)} left of the verification fee; the request's Holder is ${short(holderOf(r.verifier))}`);
       if (k) k.drawn = true;
+      r.left.share -= amt; r.vf -= amt;
       break;
     }
     case "bank.SetOffFiled": {
@@ -974,8 +1054,10 @@ for (const e of events) {
     }
     case "market.AuctionSettled": if (a.kycPending) cov(a.tokenId)!.settledAt = t; break;
     case "market.StaleSaleCancelled": {
-      const c = cov(a.tokenId)!;
-      pay(e.tx, a.buyer, B(a.price));
+      const c = cov(a.tokenId)!, price = B(a.price), forfeit = B(a.forfeit);
+      pay(e.tx, a.buyer, price - forfeit);
+      const toPool = inTx(e, "challenge.ReviewPoolFunded", (x) => B(x.a.tokenId) === c.tid).reduce((x, y) => x + B(y.a.amount), 0n);
+      forf.test(forfeit === price / 100n && toPool === forfeit, R(c.tid), () => `forfeited ${usd(forfeit)} of ${usd(price)}; ${usd(toPool)} reached the pool`);
       if (!a.failedCheck) tclk.test(t > c.settledAt + cfg.kyc, R(c.tid), () => `called off ${days(t - c.settledAt)} after the auction; the KYC window is ${days(cfg.kyc)}`);
       break;
     }
@@ -1133,7 +1215,9 @@ for (const e of events) {
       if (payee === 0) { pl.attPayBefore = pl.pool; pl.attPay = amt; winFee.test(L(a.to) === pl.win?.attestor, R(tid), () => `the window's fee went to ${short(a.to)}, not its attester`); }
       if (payee === 3) {
         const c = cov(tid)!, owner = owners.get(tid) ?? Z;
-        sweep.test(amt === pl.pool && ((c.status === CovenantStatus.ENDED && L(a.to) === c.guardian) || (c.status === CovenantStatus.CANCELLED && L(a.to) === owner)), R(tid),
+        // never sold (closed, or cancelled before its sale): only forfeits, to the landowner (item 3)
+        const toLandowner = c.status === CovenantStatus.ENDED || c.status === CovenantStatus.CLOSED || (c.status === CovenantStatus.CANCELLED && c.termStart === 0);
+        sweep.test(amt === pl.pool && ((toLandowner && L(a.to) === c.guardian) || (c.status === CovenantStatus.CANCELLED && c.termStart !== 0 && L(a.to) === owner)), R(tid),
           () => `swept ${usd(amt)} of ${usd(pl.pool)} to ${short(a.to)} with the covenant at status ${c.status}`);
         sweepOf.add(tid);
       }
@@ -1309,19 +1393,21 @@ for (const e of events) {
     case "editions.Released": {
       const rid = N(a.requestId), p = places.get(rid), en = N(a.edition), ly = B(a.landYears);
       const endedTx = inTx(e, "registry.RequestEnded", (x) => N(x.a.requestId) === rid && N(x.a.reason) !== 7).length > 0;
-      const credited = inTx(e, "tree.ReserveCredited", () => true).length > 0;
-      const closed = edClosed[en], burn = closed ? (ly * PER_EDITION) / capOf(en) : 0n;
-      plRel.test(!!p && !p.released && !p.sold && p.edition === en && p.ly === ly && B(a.burned) === burn && endedTx && !credited, `#${rid}`,
-        () => `released edition ${en}, ${ly} land-years, burned ${usd(B(a.burned))} (expected ${usd(burn)}); its place: edition ${p?.edition}, ${p?.ly}${endedTx ? "" : ", with no request ending"}${credited ? ", and the Reserve credited" : ""}`);
+      // a place released after its edition closed: that room's TR3 goes to the Reserve (E4)
+      const closed = edClosed[en], due = closed ? (ly * PER_EDITION) / capOf(en) : 0n;
+      plRel.test(!!p && !p.released && !p.sold && p.edition === en && p.ly === ly && B(a.toReserve) === due && endedTx, `#${rid}`,
+        () => `released edition ${en}, ${ly} land-years, ${usd(B(a.toReserve))} to the Reserve (expected ${usd(due)}); its place: edition ${p?.edition}, ${p?.ly}${endedTx ? "" : ", with no request ending"}`);
       if (p) p.released = true;
       edR[en] -= ly;
-      edBurn += B(a.burned);
+      addTo(unplacedDue, e.tx, B(a.toReserve));
       break;
     }
     case "editions.Moved": {
       const rid = N(a.requestId), p = places.get(rid), from = N(a.from), to = N(a.to), ly = B(a.landYears);
       const ok = !!p && !p.fixed && !p.sold && !p.released && p.edition === from && to < from && edOpened[to] !== 0 && !edClosed[to] && fitsMove(to, ly) && !waitingFits(rid, to);
       qMove.test(ok, `#${rid}`, () => `moved ${from} -> ${to}: fits ${fitsMove(to, ly)}, an earlier waiting request fits ${waitingFits(rid, to)}, fixed ${p?.fixed}, edition ${to} closed ${edClosed[to]}`);
+      // a place leaving an edition already closed leaves its room there unsold: to the Reserve (E4)
+      if (edClosed[from]) addTo(unplacedDue, e.tx, (ly * PER_EDITION) / capOf(from));
       edR[from] -= ly; edR[to] += ly;
       if (p) p.edition = to;
       moves++;
@@ -1355,13 +1441,14 @@ for (const e of events) {
       break;
     }
     case "editions.EditionClosed": {
-      const en = N(a.edition), cap = capOf(en), byClock = !!a.byClock, burn = ((cap - edR[en]) * PER_EDITION) / cap;
+      const en = N(a.edition), cap = capOf(en), byClock = !!a.byClock, due = ((cap - edR[en]) * PER_EDITION) / cap;
       let why = "";
       if (byClock) { if (t < edOpened[en] + edClock[en]) why = `closed by the clock ${date(t)}; it opened ${date(edOpened[en])} with ${days(edClock[en])}`; }
       else if (edS[en] !== cap) why = `closed with ${edS[en]} of ${cap} land-years sold`;
-      cls.test(why === "" && B(a.placed) === edR[en] && B(a.sold) === edS[en] && B(a.burned) === burn, `edition ${en}`,
-        () => why || `closed with ${a.placed} placed, ${a.sold} sold, ${usd(B(a.burned))} burned; replayed ${edR[en]}, ${edS[en]}, ${usd(burn)}`);
-      edClosed[en] = true; edBurn += B(a.burned); closesCount++;
+      cls.test(why === "" && B(a.placed) === edR[en] && B(a.sold) === edS[en] && B(a.toReserve) === due, `edition ${en}`,
+        () => why || `closed with ${a.placed} placed, ${a.sold} sold, ${usd(B(a.toReserve))} to the Reserve; replayed ${edR[en]}, ${edS[en]}, ${usd(due)}`);
+      edClosed[en] = true; closesCount++;
+      addTo(unplacedDue, e.tx, B(a.toReserve));
       if (en === ed && en < LAST_EDITION && !edSettling[en]) nextOpen = { n: en + 1, at: byClock ? edOpened[en] + edClock[en] : t };
       if (en === ed && en === LAST_EDITION) ed = LAST_EDITION + 1;
       break;
@@ -1375,14 +1462,43 @@ for (const e of events) {
       const tid = B(a.tokenId), p = places.get(reqOfToken.get(tid) ?? -1), c = cov(tid)!;
       rew.test(!!p && B(a.allocation) === p.full && N(a.edition) === p.edition && N(a.ecoScore) === c.score, R(tid), () => `${usd(B(a.allocation))} TR3 in edition ${a.edition} at score ${a.ecoScore}; the sale allocated ${usd(p?.full ?? 0n)} in ${p?.edition}, score ${c.score}`);
       trCap.test(B(a.allocation) <= MAX_BASE, R(tid), () => `allocation ${usd(B(a.allocation))}`);
-      streams.set(tid, { alloc: B(a.allocation), edition: N(a.edition), score: N(a.ecoScore), rescore: false, ended: false, stream: 0n, credits: 0n, mE6: 0n, left: 0n });
+      streams.set(tid, { alloc: B(a.allocation), edition: N(a.edition), score: N(a.ecoScore), rescore: false, ended: false, stream: 0n, credits: 0n, mE6: 0n, left: 0n,
+        mark: 0, horizon: 0, held: false, confirmed: 0n, boostEdition: 0 });
       break;
     }
-    case "tree.RewardHeld": { const s = streams.get(B(a.tokenId)); if (s && a.rescoreOnLift) s.rescore = true; break; }
-    case "tree.StreamReleased": {
-      const tid = B(a.tokenId), s = streams.get(tid)!, amt = B(a.amount), score = N(a.score);
+    case "tree.RewardHeld": { const s = streams.get(B(a.tokenId)); if (s) { s.held = true; if (a.rescoreOnLift) s.rescore = true; } break; }
+    case "tree.Underwritten": {
+      const tid = B(a.tokenId), s = streams.get(tid)!, c = cov(tid)!, h = N(a.horizon);
       const ver = inTx(e, "core.CovenantVerified", (x) => B(x.a.tokenId) === tid)[0];
-      const want = ver && s.rescore ? N(ver.a.ecoScore) : s.score;
+      let want = -1;
+      if (ver) {
+        // a verification underwrites the interval after it, never past the next scheduled due date (C9)
+        const k = N(ver.a.verifiedThrough), due = k >= c.total ? c.termEnd : c.termStart + (k + 1) * c.interval;
+        want = Math.min(t + c.interval, due);
+      } else {
+        // the activation: one interval after the verification before the sale, never past the first due date
+        const act = inTx(e, "core.CovenantActivated", (x) => B(x.a.tokenId) === tid)[0], acct = inTx(e, "bank.Activated", (x) => B(x.a.tokenId) === tid)[0];
+        if (act && acct) want = Math.min((reqs.get(c.rid)?.verifiedAt ?? 0) + N(acct.a.interval), N(act.a.termStart) + N(acct.a.interval));
+      }
+      const conf = ver ? s.stream : 0n;
+      if (want >= 0) hzn.test(h === want && B(a.confirmed) === conf, R(tid), () => `underwrote to ${date(h)} with ${usd(B(a.confirmed))} confirmed; expected ${date(want)} and ${usd(conf)}`);
+      s.horizon = h; s.confirmed = B(a.confirmed);
+      if (ver) s.held = false; // the verification lifts a stop
+      break;
+    }
+    case "tree.StreamReleased": {
+      const tid = B(a.tokenId), s = streams.get(tid)!, amt = B(a.amount), score = N(a.score), through = N(a.through);
+      const ver = inTx(e, "core.CovenantVerified", (x) => B(x.a.tokenId) === tid)[0];
+      // C9: a verification settles what the last one underwrote at the old score (unless the stream was stopped), then the
+      // rest at the score it records; anything else settles at the score in force, up to the horizon
+      const start = s.mark || cov(tid)!.termStart, cut = Math.min(s.horizon, t);
+      // a block's last cause lifted without a verification (Tree.onLift): the stream resumes
+      if (!ver && s.held && !s.rescore && inTx(e, "core.CovenantUnblocked", (x) => B(x.a.tokenId) === tid).length > 0) s.held = false;
+      const oldPart = ver && !s.held && start < cut;
+      const want = ver ? (oldPart ? s.score : N(ver.a.ecoScore)) : s.score;
+      const reach = ver ? (oldPart ? through <= cut : through <= t) : through <= s.horizon && !s.held;
+      relScore.test(reach, R(tid), () => `released through ${date(through)} from ${date(start)}${ver ? " in a verification" : ""}; the horizon was ${date(s.horizon)}${s.held ? ", and the stream was stopped" : ""}`);
+      s.mark = through;
       // the score's shortfall: the next ECOSCORE credit of this settle, if any
       const tx = byTx.get(e.tx)!, k = tx.indexOf(e);
       let credit = 0n;
@@ -1393,7 +1509,7 @@ for (const e of events) {
         if (x.name === "ReserveCredited" && N(x.a.source) === 0) { credit = B(x.a.amount); break; }
       }
       relScore.test(score === want && amt === ((amt + credit) * BigInt(score)) / 100n, R(tid), () => `released ${usd(amt)} at score ${score} (expected ${want}), ${usd(credit)} credited for the shortfall`);
-      // a boost pays released x (M - 1) from what its commit has left; its BoostPaid comes just before
+      // a boost pays released x m from what its commit has left (E2); its BoostPaid comes just before
       let boost = 0n;
       for (let j = k - 1; j >= 0; j--) {
         const x = tx[j];
@@ -1402,8 +1518,8 @@ for (const e of events) {
         break;
       }
       if (s.mE6 !== 0n) {
-        let b = (amt * (s.mE6 - 1_000_000n)) / 1_000_000n; if (b > s.left) b = s.left;
-        ovc.test(boost === b, R(tid), () => `boost paid ${usd(boost)} on ${usd(amt)}; ${usd(b)} expected at M ${Number(s.mE6) / 1e6}`);
+        let b = (amt * s.mE6) / 1_000_000n; if (b > s.left) b = s.left;
+        ovc.test(boost === b, R(tid), () => `boost paid ${usd(boost)} on ${usd(amt)}; ${usd(b)} expected at m ${Number(s.mE6) / 1e6}`);
         s.left -= boost;
       } else ovc.test(boost === 0n, R(tid), () => `a boost of ${usd(boost)} without a commit`);
       s.stream += amt; releasedEv += amt;
@@ -1411,39 +1527,47 @@ for (const e of events) {
     }
     case "tree.BoostPaid": releasedEv += B(a.amount); committedEv -= B(a.amount); break;
     case "tree.ReserveCredited": {
-      const tid = B(a.tokenId), s = streams.get(tid);
-      if (s && N(a.source) !== 4) s.credits += B(a.amount);
+      const tid = B(a.tokenId), s = streams.get(tid), src = N(a.source);
+      if (s && src !== 4) s.credits += B(a.amount);
       reserveEv += B(a.amount);
+      if (src !== 4) reserveCreditedEv += B(a.amount); // a returned boost is no credit (E3)
+      if (src === 5) addTo(unplacedCredited, e.tx, B(a.amount));
       break;
     }
     case "tree.BoostReturned": {
-      const s = streams.get(B(a.tokenId))!;
-      ovc.test(B(a.amount) === s.left, R(B(a.tokenId)), () => `returned ${usd(B(a.amount))}; ${usd(s.left)} was left`);
-      s.left = 0n; committedEv -= B(a.amount);
+      // the whole of what is left, or an acquired part's share of it (E6)
+      const tid = B(a.tokenId), s = streams.get(tid)!, amt = B(a.amount);
+      const part = inTx(e, "parties.Acquired", (x) => B(x.a.tokenId) === tid && N(x.a.permille) < 1000)[0];
+      const want = part ? (s.left * BigInt(N(part.a.permille))) / 1000n : s.left;
+      ovc.test(amt === want, R(tid), () => `returned ${usd(amt)}; ${usd(s.left)} was left${part ? `, ${part.a.permille}‰ of it acquired` : ""}`);
+      s.left -= amt; committedEv -= amt; drawnBy[s.edition] -= amt;
       break;
     }
     case "tree.RewardEnded": {
       const tid = B(a.tokenId), s = streams.get(tid)!;
       strCons.test(s.stream + s.credits === s.alloc && !s.ended, R(tid), () => `ended with ${usd(s.stream)} released and ${usd(s.credits)} credited of ${usd(s.alloc)}`);
-      s.ended = true;
+      s.ended = true; s.held = false;
       break;
     }
     case "tree.BoostCommitted": {
-      const tid = B(a.tokenId), s = streams.get(tid)!, commit = B(a.commit), mE6 = B(a.mE6);
+      const tid = B(a.tokenId), s = streams.get(tid)!, c = cov(tid)!, commit = B(a.commit), mE6 = B(a.mE6);
       const oc = inTx(e, "overcharge.OverchargeCommitted", (x) => B(x.a.targetId) === tid)[0];
       const relic = oc ? relics.get(B(oc.a.relicId)) : undefined;
-      const remaining = s.alloc - s.stream - s.credits;
-      let want = (remaining * (mE6 - 1_000_000n)) / 1_000_000n;
+      // E2, E3: the least of the allocation not yet streamed x m, the Relic's cap, the edition's share left, the Reserve
+      const remaining = s.alloc - s.stream - s.credits, share = shareLeftOf(s.edition);
+      let want = (remaining * mE6) / 1_000_000n;
       if (relic && relic.cap < want) want = relic.cap;
+      if (share < want) want = share;
       if (reserveEv < want) want = reserveEv;
-      const m = relic ? (fib(s.edition) * 1_000_000n) / fib(relic.edition) : 0n;
-      ovc.test(!!relic && relic.edition < s.edition && mE6 === m && commit === want && s.mE6 === 0n && !s.ended, R(tid),
-        () => `committed ${usd(commit)} at M ${Number(mE6) / 1e6}; expected ${usd(want)} at ${Number(m) / 1e6} (Relic edition ${relic?.edition}, cap ${usd(relic?.cap ?? 0n)}, target edition ${s.edition})`);
-      s.mE6 = mE6; s.left = commit;
-      reserveEv -= commit; committedEv += commit;
+      const m = relic ? liftOf(s.edition, relic.edition) : 0n;
+      const fresh = c.termStart !== 0 && t < c.termStart + c.interval; // E1: the first interval
+      ovc.test(!!relic && m !== 0n && mE6 === m && commit === want && fresh && s.mE6 === 0n && !s.ended && !s.held, R(tid),
+        () => `committed ${usd(commit)} at m ${Number(mE6) / 1e6} ${date(t)}; expected ${usd(want)} at ${Number(m) / 1e6} (Relic edition ${relic?.edition}, cap ${usd(relic?.cap ?? 0n)}, target edition ${s.edition}, share left ${usd(share)}, the first interval ${fresh ? "" : "over "}to ${date(c.termStart + c.interval)})`);
+      s.mE6 = mE6; s.left = commit; s.boostEdition = relic?.edition ?? 0;
+      reserveEv -= commit; committedEv += commit; drawnBy[s.edition] += commit;
       break;
     }
-    case "tree.ReserveFinalized": burnedEv += B(a.amount); reserveEv -= B(a.amount); break;
+    case "tree.ReserveFinalized": burnedEv += B(a.amount); reserveEv -= B(a.amount); reserveFinalizedEv = true; break;
     case "tree.RewardClaimed": {
       const tid = B(a.tokenId), x = claims.get(tid) ?? { p: 0n, g: 0n, r: 0n };
       if (B(a.patronAmount) !== 0n) {
@@ -1463,10 +1587,26 @@ for (const e of events) {
       break;
     }
     case "overcharge.RelicMinted": {
+      // the cap is the confirmed record: what streamed after the last verification counts only once one confirms it (E5)
       const src = B(a.fromTokenId), s = streams.get(src), c = cov(src);
-      ovc.test(!!s && s.ended && c?.status === CovenantStatus.ENDED && N(a.edition) === s.edition && B(a.cap) === s.stream, `Relic ${a.relicId}`,
-        () => `minted from ${R(src)} (status ${c?.status}) with cap ${usd(B(a.cap))} in edition ${a.edition}; its land released ${usd(s?.stream ?? 0n)} in ${s?.edition}`);
+      ovc.test(!!s && s.ended && c?.status === CovenantStatus.ENDED && N(a.edition) === s.edition && B(a.cap) === s.confirmed, `Relic ${a.relicId}`,
+        () => `minted from ${R(src)} (status ${c?.status}) with cap ${usd(B(a.cap))} in edition ${a.edition}; its confirmed record is ${usd(s?.confirmed ?? 0n)} (released ${usd(s?.stream ?? 0n)}) in ${s?.edition}`);
       relics.set(B(a.relicId), { edition: N(a.edition), cap: B(a.cap) });
+      break;
+    }
+    case "overcharge.CapReturned": {
+      // E6: a boost's unpaid commitment comes back as a Relic of the spending Relic's edition, to the EFT's owner
+      const tid = B(a.targetId), s = streams.get(tid), cap = B(a.cap);
+      const ret = inTx(e, "tree.BoostReturned", (x) => B(x.a.tokenId) === tid).reduce((x, y) => x + B(y.a.amount), 0n);
+      ovc.test(!!s && cap === ret && cap >= WAD && N(a.edition) === s.boostEdition && L(a.owner) === owners.get(tid), `Relic ${a.relicId}`,
+        () => `returned to ${short(a.owner)} with cap ${usd(cap)} in edition ${a.edition}; ${usd(ret)} returned unpaid from ${R(tid)}, boosted by an edition-${s?.boostEdition} Relic, owned by ${short(owners.get(tid) ?? Z)}`);
+      relics.set(B(a.relicId), { edition: N(a.edition), cap });
+      break;
+    }
+    case "overcharge.RelicRetired": {
+      const r = relics.get(B(a.relicId));
+      ovc.test(!!r && B(a.capLost) === r.cap, `Relic ${a.relicId}`, () => `retired with ${usd(B(a.capLost))} of cap lost; replayed ${usd(r?.cap ?? 0n)}`);
+      relics.delete(B(a.relicId));
       break;
     }
     case "overcharge.Transmuted": {
@@ -1477,10 +1617,23 @@ for (const e of events) {
       relics.set(B(a.relicId), { edition: N(a.edition), cap: B(a.cap) });
       break;
     }
-    case "overcharge.OverchargeCommitted": relics.delete(B(a.relicId)); break;
+    case "overcharge.OverchargeCommitted": {
+      // the Relic's cap falls by the commit; it is burned at zero (E2)
+      const r = relics.get(B(a.relicId));
+      if (r) { r.cap -= B(a.commit); if (r.cap === 0n) relics.delete(B(a.relicId)); }
+      break;
+    }
   }
 }
 flushTx();
+// E4: in every transaction, the unplaced room the editions report going to the Reserve is what Tree credited (once the
+// Reserve is finalised it is burned instead, and nothing is credited)
+for (const tx of new Set([...unplacedDue.keys(), ...unplacedCredited.keys()])) {
+  const due = unplacedDue.get(tx) ?? 0n, got = unplacedCredited.get(tx) ?? 0n;
+  const ev = byTx.get(tx)?.[0], late = reserveFinalizedEv && ev !== undefined && E("tree.ReserveFinalized").some((f) => f.ord < ev.ord);
+  e4.test(late ? got === 0n : got === due, `block ${ev?.block ?? "?"}`, () => `the editions sent ${usd(due)} of unplaced room to the Reserve; Tree credited ${usd(got)}`);
+  if (late) burnedEv += due;
+}
 
 // =====================================================================================
 // The state now, against the replay
@@ -1495,11 +1648,15 @@ for (const e of E("registry.RequestEnded")) {
   const r = reqs.get(N(e.a.requestId))!;
   lst.test(e.t > (reqStateListingFrom.get(r.rid) ?? 0) + r.listing, `#${r.rid}`, () => `closed unsold ${date(e.t)}; its window ran to ${date((reqStateListingFrom.get(r.rid) ?? 0) + r.listing)}`);
 }
+const feesNow = await Promise.all(reqIds.map((rid) => rd("deeds", "feesOf", [BigInt(rid)])));
 reqIds.forEach((rid, i) => {
-  const r = reqs.get(rid)!, x = reqNow[i];
-  const held = B(x.verifierShare) + B(x.attestationFee) + B(x.judgmentFee) + B(x.allowance);
-  const paidIn = r.vf + r.af + r.jf + r.al, left = r.left.share + r.left.att + r.left.jud + r.left.al;
+  const r = reqs.get(rid)!, x = reqNow[i], f = feesNow[i];
+  const held = B(x.verifierShare) + B(x.attestationFee) + B(x.judgmentFee);
+  const paidIn = r.vf + r.af + r.jf, left = r.left.share + r.left.att + r.left.jud;
   upCons.test(held === left, `#${rid}`, () => `paid in ${usd(paidIn)}; the replay leaves ${usd(left)}, the Registry holds ${usd(held)}`);
+  const inDeeds = [B(f.power), B(f.agreement), B(f.registration)], replay = [r.left.p, r.left.g, r.left.r];
+  upCons.test(inDeeds.every((v, k) => v === replay[k]), `#${rid}`, () => `fees 3-5: the replay leaves ${replay.map(usd).join(" / ")}, EcoDeeds holds ${inDeeds.map(usd).join(" / ")}`);
+  if (N(x.endReason) === 7) paperF.test(inDeeds.every((v) => v === 0n), `#${rid}`, () => `completed with ${inDeeds.map(usd).join(" / ")} of fees 3-5 unused`);
   lst.test(N(x.listingWindow) === r.listing && N(x.postSaleWindow) === r.postSale, `#${rid}`, () => `took listing ${days(N(x.listingWindow))}, post-sale ${days(N(x.postSaleWindow))}; the country had ${days(r.listing)} and ${days(r.postSale)}`);
 });
 for (const l of listings) {
@@ -1516,7 +1673,7 @@ const covNow = await Promise.all(tids.map(async (tid) => {
   ]);
   return { tid, c, a, pool: B(pool), seat: seatNow, rw, holder: L(holderNow) };
 }));
-let claimable = 0n, unstreamedEv = 0n, livePlaces = 0n, verifierSummary = { terms: 0, share: 0 };
+let claimable = 0n, pendingNow = 0n, unstreamedEv = 0n, livePlaces = 0n, verifierSummary = { terms: 0, share: 0 };
 for (const x of covNow) {
   const c = covs.get(x.tid)!, ac = accts.get(x.tid), s = streams.get(x.tid), pl = pools.get(x.tid);
   // the money
@@ -1556,7 +1713,8 @@ for (const x of covNow) {
   }
   // TR3
   if (s) {
-    const v = x.rw, rel = B(v.released), gross = (rel * 10n) / 100n, ref = L(x.c.referral);
+    // what has streamed and not yet settled is claimable too (C9): Tree splits released + pending
+    const v = x.rw, rel = B(v.released) + B(v.pending), gross = (rel * 10n) / 100n, ref = L(x.c.referral);
     const refSlot = ref === Z ? 0n : (gross * 30n) / 100n;
     // while a land buyer has not acceded the landowner's side is owed but not claimable (Tree.rewardOf shows it as 0):
     // what it is owed is the released share less what was paid, split as Tree._due would
@@ -1566,7 +1724,9 @@ for (const x of covNow) {
     const cl = claims.get(x.tid) ?? { p: 0n, g: 0n, r: 0n };
     trSplit.test(patron === rel - gross && guardian === gross - refSlot && referral === refSlot && cl.p === B(v.patronPaid) && cl.g + cl.r === B(v.guardianPaid) + B(v.referralPaid), R(x.tid),
       () => `released ${usd(rel)}: patron ${usd(patron)}, landowner ${usd(guardian)}, referral ${usd(referral)}; claimed ${usd(cl.p)} / ${usd(cl.g + cl.r)}`);
-    trCap.test(B(v.landEarned) <= B(v.allocation) && B(v.landEarned) === s.stream, R(x.tid), () => `land TR3 ${usd(B(v.landEarned))} of ${usd(B(v.allocation))} (the events released ${usd(s.stream)})`);
+    trCap.test(B(v.landEarned) <= B(v.allocation) && B(v.released) - B(v.boostPaid) === s.stream, R(x.tid), () => `land TR3 ${usd(B(v.landEarned))} of ${usd(B(v.allocation))}, released ${usd(B(v.released) - B(v.boostPaid))} (the events released ${usd(s.stream)})`);
+    hzn.test(N(v.horizon) === s.horizon && B(v.confirmed) === s.confirmed, R(x.tid), () => `Tree has the horizon ${date(N(v.horizon))} and ${usd(B(v.confirmed))} confirmed; replayed ${date(s.horizon)}, ${usd(s.confirmed)}`);
+    pendingNow += B(v.pending);
     if (!s.ended) strCons.test(s.stream + s.credits <= s.alloc, R(x.tid), () => `${usd(s.stream)} released and ${usd(s.credits)} credited of ${usd(s.alloc)}`);
     ovc.test(B(v.boostLeft) === s.left && B(v.mE6) === s.mE6, R(x.tid), () => `boost left ${usd(B(v.boostLeft))} (replayed ${usd(s.left)})`);
     claimable += B(v.patronClaimable) + B(v.guardianClaimable) + B(v.referralClaimable) + gHeld + rHeld;
@@ -1591,11 +1751,12 @@ for (const p of places.values()) {
 {
   const [curNow, clockNow, ...eds] = await Promise.all([rd("editions", "current"), rd("editions", "currentEdition"),
     ...Array.from({ length: LAST_EDITION }, (_, i) => rd("editions", "editionOf", [i + 1]))]);
-  // the clocks as they stand now: an edition whose 8 years are up is closed though nobody has rolled it, and the OPEN
-  // one's successors open at its mark (EcoEditions._now); what those closes burn is in burnedTotal
+  // the clocks as they stand now: an edition whose clock is up is closed though nobody has rolled it, and the OPEN
+  // one's successors open at its mark (EcoEditions._now); what those closes leave is the Reserve's at the next roll, and
+  // Tree's supply counts it in the Reserve already (EcoEditions.reserveDue, E4)
   const shut = (n: number) => edClosed[n] || (edOpened[n] !== 0 && now >= edOpened[n] + edClock[n]);
-  let clockBurn = 0n;
-  for (let n = 1; n <= LAST_EDITION; n++) if (!edClosed[n] && shut(n)) clockBurn += ((capOf(n) - edR[n]) * PER_EDITION) / capOf(n);
+  let clockDue = 0n;
+  for (let n = 1; n <= LAST_EDITION; n++) if (!edClosed[n] && shut(n)) clockDue += ((capOf(n) - edR[n]) * PER_EDITION) / capOf(n);
   let n2 = ed;
   const virt = new Set<number>(); // editions the clock opened and closed with nobody rolling it
   if (n2 <= LAST_EDITION && shut(n2)) {
@@ -1603,7 +1764,7 @@ for (const p of places.values()) {
     while (n2 <= LAST_EDITION) {
       if (n2 === LAST_EDITION) { n2 = LAST_EDITION + 1; break; }
       n2++;
-      if (now >= mark + clockOf(n2)) { virt.add(n2); clockBurn += PER_EDITION; mark += clockOf(n2); } else break;
+      if (now >= mark + clockOf(n2)) { virt.add(n2); clockDue += PER_EDITION; mark += clockOf(n2); } else break;
     }
   }
   const stateOf = (n: number) => shut(n) || virt.has(n) ? 3 : edOpened[n] === 0 ? (n === n2 ? 1 : 0) : edSettling[n] ? 2 : 1;
@@ -1624,15 +1785,16 @@ for (const p of places.values()) {
     rd("tree", "mintedToPatrons"), rd("tree", "mintedToGuardians"), rd("tree", "mintedToReferrers")]);
   trSup.test(B(supply) === claimedEv && B(supply) === B(mp) + B(mg) + B(mr), "TREE", () => `supply ${usd(B(supply))}, claims ${usd(claimedEv)}, minted to the three parties ${usd(B(mp) + B(mg) + B(mr))}`);
   const parts: [string, bigint, bigint][] = [
-    ["minted", B(sb.minted), claimedEv], ["owed", B(sb.owed), releasedEv - claimedEv], ["reserve", B(sb.reserve), reserveEv],
+    ["minted", B(sb.minted), claimedEv], ["owed", B(sb.owed), releasedEv - claimedEv], ["reserve", B(sb.reserve), reserveEv + clockDue],
     ["committed", B(sb.committed), committedEv], ["unstreamed", B(sb.unstreamed), unstreamedEv],
-    ["burned", B(sb.burned), burnedEv + edBurn + capBurn + clockBurn], ["unsold", B(unplaced), unplacedEv],
+    ["burned", B(sb.burned), burnedEv + capBurn], ["unsold", B(unplaced), unplacedEv],
   ];
   for (const [what, chain, ev] of parts) brk.test(chain === ev, what, () => `the chain has ${usd(chain)}, the events give ${usd(ev)}`);
   const sum = B(sb.minted) + B(sb.owed) + B(sb.reserve) + B(sb.committed) + B(sb.unstreamed) + B(sb.unallocated) + B(sb.burned);
   const dust = B(sb.unallocated) - B(unplaced), bound = BigInt(E("editions.Reserved").length + closesCount + 22);
   brk.test(sum === MAX_SUPPLY && dust >= 0n && dust <= bound, "210,000,000", () => `the parts sum to ${usd(sum)}; unallocated ${usd(B(sb.unallocated))} vs unsold ${usd(B(unplaced))} (dust ${dust} wei, at most ${bound})`);
-  brk.test(B(sb.owed) === claimable, "owed", () => `owed ${usd(B(sb.owed))}; the covenants have ${usd(claimable)} claimable`);
+  // what is claimable counts what has streamed and not yet settled; owed is what has been released (C9)
+  brk.test(B(sb.owed) === claimable - pendingNow, "owed", () => `owed ${usd(B(sb.owed))}; the covenants have ${usd(claimable)} claimable, ${usd(pendingNow)} of it not yet settled`);
   observations.tr3 = {
     minted: usd(B(sb.minted)), owed: usd(B(sb.owed)), reserve: usd(B(sb.reserve)), committed: usd(B(sb.committed)), unstreamed: usd(B(sb.unstreamed)),
     unallocated: usd(B(sb.unallocated)), burned: usd(B(sb.burned)), allocatedLive: usd(livePlaces), dustWei: String(dust),
@@ -1640,7 +1802,7 @@ for (const p of places.values()) {
   };
   observations.editions = {
     current: ed, closed: closesCount, byClock: E("editions.EditionClosed").filter((e) => e.a.byClock).length,
-    burnedByCloses: usd(E("editions.EditionClosed").reduce((x, e) => x + B(e.a.burned), 0n)),
+    toReserveByCloses: usd(E("editions.EditionClosed").reduce((x, e) => x + B(e.a.toReserve), 0n)),
     reservations: E("editions.Reserved").length, released: E("editions.Released").length, promotions: moves,
     settling: E("editions.EditionSettling").length, fixed: fixes, unfixed: unfixes, sold: E("editions.Sold").length,
     assignedByHolders: E("parties.VerifierAssigned").length, rejectionsFiled: E("parties.RequestRejected").length,
@@ -1687,7 +1849,7 @@ if (process.env.CONFIG) {
   const j = JSON.parse(readFileSync(process.env.CONFIG, "utf8"));
   const sc = j.scenario ?? j;
   const k = sc.contracts;
-  const dep = check("deployment-matches-config", "Configuration", "Every value the contracts were deployed with is the one the configuration asked for: each timing and clock, V, the fee split, the edition scale, every country's settings, fees and allowance, and every flow", "The setup screen; src/deploy.ts");
+  const dep = check("deployment-matches-config", "Configuration", "Every value the contracts were deployed with is the one the configuration asked for: each timing and clock, V, the fee split, the edition scale, every country's settings and fees, and every flow", "The setup screen; src/deploy.ts");
   const want: [string, number, number][] = [
     ["protocol year", k.yearDays * DAY, cfg.year], ["verification grace", k.maxVerificationDelayDays * DAY, cfg.maxDelay],
     ["acceptance", k.acceptanceDays * DAY, cfg.acceptance], ["watchdog", k.watchdogDays * DAY, cfg.watchdog],
@@ -1718,7 +1880,8 @@ if (process.env.CONFIG) {
     dep.test(!!e && N(e.settings.flowId) === c.flowId && N(e.settings.minTermYears) === c.minTerm && N(e.settings.maxTermYears) === c.maxTerm
       && N(e.settings.listingWindow) === c.listingDays * DAY && N(e.settings.postSaleWindow) === c.postSaleDays * DAY
       && B(e.fees.baseFee) === BigInt(c.baseFee) * USD && B(e.fees.deskRate) === BigInt(c.deskRate) * USD
-      && B(e.fees.allowanceFixed) === BigInt(c.allowanceFixed) * USD && B(e.fees.allowancePerHa) === BigInt(c.allowancePerHa) * USD,
+      && B(e.fees.powerFee) === BigInt(c.powerFee) * USD && B(e.fees.agreementFee) === BigInt(c.agreementFee) * USD
+      && B(e.fees.registrationFixed) === BigInt(c.registrationFixed) * USD && B(e.fees.registrationPerHa) === BigInt(c.registrationPerHa) * USD,
       `${c.name} (${c.code})`, () => e ? `deployed ${JSON.stringify({ ...e.settings, ...e.fees }, (_, v) => typeof v === "bigint" ? v.toString() : v)}` : "not enabled");
     const h = nHolders.get(c.code) ?? 0, v = nVerifiers.get(c.code) ?? 0, wantV = c.holders * c.orgsPerHolder * c.verifiersPerOrg;
     cast.test(h >= c.holders && h <= c.holders + 2 && v >= wantV, `${c.name} (${c.code})`, () => `${h} Trust Admins and ${v} verifiers; configured ${c.holders} and ${wantV}`);
@@ -1734,10 +1897,11 @@ if (process.env.CONFIG) {
 
 // ---- the balances now ----
 {
-  const c = check("balances-now", "Money", "Now: the Registry, the Market (settling prices and live auctions' top bids), the Bank and EcoChallenge each hold exactly what their records say", "The simulator's invariants 1-3");
+  const c = check("balances-now", "Money", "Now: the Registry, EcoDeeds, the Market (settling prices and live auctions' top bids), the Bank and EcoChallenge each hold exactly what their records say", "The simulator's invariants 1-3");
   const bal = (a: string) => rd("usdt", "balanceOf", [a]).then(B);
-  let reg = 0n, market = 0n, bank = 0n, pool = 0n;
-  for (const x of reqNow) reg += B(x.verifierShare) + B(x.attestationFee) + B(x.judgmentFee) + B(x.allowance);
+  let reg = 0n, deeds = 0n, market = 0n, bank = 0n, pool = 0n;
+  for (const x of reqNow) reg += B(x.verifierShare) + B(x.attestationFee) + B(x.judgmentFee);
+  for (const f of feesNow) deeds += B(f.power) + B(f.agreement) + B(f.registration);
   const settling = await Promise.all(tids.map(async (tid) => (await rd("market", "inSettlement", [tid])) ? B((await rd("market", "getSettlement", [tid])).price) : 0n));
   for (const s of settling) market += s;
   // and each live auction's escrowed top bid (decided 17 Oct)
@@ -1746,8 +1910,9 @@ if (process.env.CONFIG) {
   for (const x of covNow) { bank += B(x.a.balance); pool += x.pool; }
   const heldFor = [...new Set(E("bank.HolderFeeHeld").map((e) => L(e.a.holder)))];
   for (const h of heldFor) bank += B(await rd("bank", "heldForSuccessor", [h]));
-  const [b1, b2, b3, b4] = await Promise.all([bal(addr.registry), bal(addr.market), bal(addr.bank), bal(addr.challenge)]);
+  const [b1, b2, b3, b4, b5] = await Promise.all([bal(addr.registry), bal(addr.market), bal(addr.bank), bal(addr.challenge), bal(addr.deeds)]);
   c.test(b1 === reg, "Registry", () => `holds ${usd(b1)}, records ${usd(reg)}`);
+  c.test(b5 === deeds, "EcoDeeds", () => `holds ${usd(b5)}, records ${usd(deeds)}`);
   c.test(b2 === market, "Market", () => `holds ${usd(b2)}, records ${usd(market)}`);
   c.test(b3 === bank, "Bank", () => `holds ${usd(b3)}, records ${usd(bank)}`);
   c.test(b4 === pool, "EcoChallenge", () => `holds ${usd(b4)}, records ${usd(pool)}`);
@@ -1787,7 +1952,7 @@ const summary = {
   counts: Object.fromEntries(["VerificationRequested", "VerificationSubmitted", "CovenantMinted", "Activated", "CovenantVerified", "InstalmentsReleased",
     "ChallengeRaised", "ChallengeDetermined", "ChallengeLapsed", "ChallengeWithdrawn", "SeatVacated", "VerifierReplaced", "CovenantBlocked",
     "CovenantCancelled", "CovenantClosedEarly", "SaleLapsed", "Sold", "RelicMinted", "BoostCommitted", "RewardClaimed", "EditionClosed",
-    "ProposalExecuted", "CountryVoteExecuted", "EmergencyFreeze", "AllowanceDrawn", "AccessionLapsed"].map((n) => [n, count(n)])),
+    "ProposalExecuted", "CountryVoteExecuted", "EmergencyFreeze", "FeePaid", "FeesRefunded", "StaleSaleCancelled", "AccessionLapsed"].map((n) => [n, count(n)])),
   failedBy: Object.entries(failed.reduce((m, f) => { const k = `${f.to}.${f.fn}${f.expected ? " (expected)" : ""}`; m[k] = (m[k] ?? 0) + 1; return m; }, {} as Record<string, number>)),
   observations, configuration: { ...cfg, defaultBaseFee: usd(defaultV0), editionScale: N(editionScale) },
   checks: checks.map((c) => ({ ...c, failures: c.failures.slice(0, 40), failureCount: c.failures.length })),
