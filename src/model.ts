@@ -28,6 +28,8 @@ export const Option = { NONE: 0, W1A: 1, W1B: 2, T3A: 3, T3B: 4, T3C: 5, T3D: 6,
 export const OptionName = ["", "1A: the score", "1B: the documents", "3A: the Deed off the register", "3B: the score, or a missed breach",
   "3C: natural damage", "3D: the landowner's breach", "3E: a wrong block"];
 /** Why instalments are held (Bank Account.holds bits). */
+/** EcoOvercharge.State: a Relic charges with its EFT, wakes at a completed End Date, or shatters (320M model). */
+export const RelicState = { NONE: 0, CHARGING: 1, AWAKE: 2, SHATTERED: 3, FORGED: 4 } as const;
 export const Holds = { BREACH: 1, VACANCY: 2, DEED: 4, HALT: 8, ACCESSION: 16, COUNCIL: 32, PARTITION: 64 } as const;
 export const Payee = ["attestor", "panel", "challenger", "guardian"];
 export const Action = {
@@ -35,8 +37,9 @@ export const Action = {
   SET_COUNTRY_STATUS: 7, REVOKE_POWER: 8, SWITCH_PAYEE: 9, REASSIGN_VERIFIER: 10, CLEAR_PARCEL: 11,
   UNBLOCK_COVENANT: 12, CANCEL_COVENANT: 13, NOMINATE_VERIFIER: 14, FREEZE_DRIP: 15, SUSPEND_VERIFIER: 16,
   DISMISS_VERIFIER: 17, END_REWARD: 18, EXTEND_CLOCK: 19, ACQUISITION: 20, CANCEL_ROOT: 21, RECORD_DOCUMENT: 22,
+  APPROVE_ROOT_OP: 23, SET_MIN_FIELD_RATE: 24, MOVE_HOLDER_SEAT: 25,
 } as const;
-/** What a country vote decides: the GTAs and the country's own Trust Admins, more than half of them. */
+/** What a country vote decides: two blocs, the Council and the country's own Trust Admins, each by more than half (item 11). */
 export const Matter = { REPLACE_HOLDER: 0, SET_FEES: 1, APPLY_SETTINGS: 2 } as const;
 export const ActionName = Object.fromEntries(Object.entries(Action).map(([k, v]) => [v, k.toLowerCase().replaceAll("_", " ")]));
 /** The digital agreements (EcoTypes.Agreements), by the kind an account accepts. */

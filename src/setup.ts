@@ -80,6 +80,7 @@ const COUNTRY_COLS: { key: keyof CountryConfig; label: string; w?: string; min?:
   { key: "baseFee", label: "V (0 = default)", min: 0 }, { key: "deskRate", label: "D (0 = V × 4/50)", min: 0 },
   { key: "powerFee", label: "Fee 3: power", min: 0 }, { key: "agreementFee", label: "Fee 4: agreement", min: 0 },
   { key: "registrationFixed", label: "Fee 5: fixed", min: 0 }, { key: "registrationPerHa", label: "Fee 5 per ha", min: 0 },
+  { key: "fieldRate", label: "W: field cost per ha (0 = USD 7)", min: 0 },
   { key: "typicalHa", label: "Typical plot (ha)", min: 0.01 }, { key: "largestHa", label: "Largest plot (ha)", min: 0.01 },
   { key: "valuePerHaYear", label: "Value per ha a year", min: 0 },
   { key: "holders", label: "Trust Admins", min: 1, max: 9 }, { key: "orgsPerHolder", label: "Orgs each", min: 1, max: 9 },
@@ -207,7 +208,7 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
       const iso = ALL_COUNTRIES.find(([n]) => n === code);
       const [name, short] = KNOWN_COUNTRIES[code] ?? (iso ? [iso[2], iso[1]] : [`Country ${code}`, `C${code}`.slice(0, 3)]);
       sc.countries.push({ code, name, short, flowId: 2, minTerm: 3, maxTerm: 100, listingDays: 358, postSaleDays: 0, baseFee: 0,
-        deskRate: 0, powerFee: 20, agreementFee: 20, registrationFixed: 30, registrationPerHa: 2, typicalHa: 10, largestHa: 500, valuePerHaYear: 50, holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 20 });
+        deskRate: 0, powerFee: 20, agreementFee: 20, registrationFixed: 30, registrationPerHa: 2, fieldRate: 0, typicalHa: 10, largestHa: 500, valuePerHaYear: 50, holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 20 });
       persist(); render();
       return;
     }

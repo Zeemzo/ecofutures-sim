@@ -1,7 +1,7 @@
 // Turns each protocol event into a sentence a person can follow.
 import type { Decoded } from "./chain";
 import type { Ledger } from "./ledger";
-import { nameOf, money, dateOf, countryName, hectares, StepName, EndReason, ActionName, Payee, OptionName, BlockReason, YEAR } from "./model";
+import { nameOf, money, dateOf, countryName, hectares, StepName, EndReason, ActionName, Payee, OptionName, BlockReason } from "./model";
 
 export type Category = "lifecycle" | "money" | "challenge" | "term" | "governance" | "alert" | "note";
 export type Entry = { t: number; rid: number; cat: Category; text: string; minor?: boolean; seq: number };
@@ -94,7 +94,7 @@ const FORMATS: Record<string, Fmt> = {
     if (a.amount === 0n) return null; // the End Date with nothing left to release
     const p = a.payout;
     const what = n(a.count) === 0 ? `${r}'s first instalment is paid` : `${r} releases ${n(a.count)} instalment${n(a.count) === 1 ? "" : "s"}`;
-    return ["money", `${what}: ${nameOf(p.guardian)} ${usd(p.guardianAmount)}${p.consideration > 0n ? ` (of which ${usd(p.consideration)} the annual consideration)` : ""}, ${nameOf(p.verifier)} ${usd(p.verifierFee)}, ${nameOf(p.holder)} ${usd(p.holderFee)}, the Foundation ${usd(p.foundationFee)}.`];
+    return ["money", `${what}: ${nameOf(p.guardian)} ${usd(p.guardianAmount)}, ${nameOf(p.verifier)} ${usd(p.verifierFee)}, ${nameOf(p.holder)} ${usd(p.holderFee)}, the Foundation ${usd(p.foundationFee)}.`];
   },
   "bank.HoldSet": (a, r) => ["alert", `${r}'s instalments are ${n(a.holds) === 0 ? "released from every hold" : "held"}.`, true],
   "bank.AccountClosed": (a, r) => a.toPatron > 0n ? ["money", `${r}'s held instalments go to the patron at the End Date: ${usd(a.toPatron)}.`] : null,
@@ -125,7 +125,9 @@ const FORMATS: Record<string, Fmt> = {
     `${nameOf(a.holder)}'s emergency freeze ends${a.ratified ? ", ratified by the Council" : ": the Council did not ratify it"}.`],
   "governance.GTASeated": (a) => ["governance", `${nameOf(a.gta)} takes a seat on the Council.`],
   "governance.GTAUnseated": (a) => ["governance", `${nameOf(a.gta)} leaves the Council.`],
-  "governance.CountryVoteProposed": (a) => ["governance", `${nameOf(a.by)} proposes a vote of the GTAs and ${countryName(n(a.country))}'s Trust Admins: ${["replace a Trust Admin", "the country's fees", "the country's settings"][n(a.matter)]}.`],
+  "governance.CountryVoteProposed": (a) => ["governance", `${nameOf(a.by)} proposes a vote of the Council and ${countryName(n(a.country))}'s Trust Admins, each by a majority: ${["replace a Trust Admin", "the country's fees", "the country's settings"][n(a.matter)]}.`],
+  "governance.CouncilFallbackProposed": (a) => ["governance", `The country's Trust Admins did not carry vote ${n(a.original)}: the Council proposes it alone, by two thirds.`],
+  "governance.HolderSeatMoved": (a) => ["governance", `The Council moves ${nameOf(a.holder)}'s seat to a new wallet, ${nameOf(a.wallet)}, at its board's request.`],
   "governance.CountryVoteExecuted": (a) => ["governance", `${countryName(n(a.country))}'s vote carries: ${["a Trust Admin is replaced", "its fees change for new requests", "its settings change for new requests"][n(a.matter)]}.`],
   "governance.DocumentRecorded": (a) => ["governance", `The Council records a document on chain (${a.uri}).`],
   "governance.FeeSplitProposed": (a) => ["governance", `A new fee split is proposed; it can take effect from ${dateOf(n(a.readyAt))}.`],
@@ -143,31 +145,26 @@ const FORMATS: Record<string, Fmt> = {
     `${countryName(n(a.country))}'s settings change: terms ${n(a.settings.minTermYears)} to ${n(a.settings.maxTermYears)} years, for new requests.`],
 
   // ---- editions, the Reserve and Relics ----
-  "editions.Reserved": (a, r) => ["term", `${r} takes its place at sign-up: ${ha(a.landYears)} ha-yr in edition ${n(a.edition)}, the open one.`],
-  "editions.Moved": (a, r) => ["term", `Room free in edition ${n(a.to)} goes to the earliest waiting request that fits: ${r} moves down from edition ${n(a.from)}.`],
-  "editions.EditionSettling": (a) => ["alert", `Edition ${n(a.edition)} is settling: it takes no more sign-ups, and its free room goes to waiting requests from the editions above.`],
-  "editions.Fixed": (a, r) => ["term", `${r}'s auction ended with a winner: its edition, ${n(a.edition)}, is fixed.`, true],
-  "editions.Unfixed": (a, r) => ["term", `${r}'s sale was called off: its edition is unfixed, and its place in the queue kept.`],
-  "editions.Sold": (a, r) => ["term", `${r} is sold in edition ${n(a.edition)}: ${tree(a.allocation)} over its term at an EcoScore of 100${a.capBurned > 0n ? `, the ${tree(a.capBurned)} above the per-land cap burned` : ""}.`, true],
-  "editions.Released": (a, r) => ["money", a.toReserve > 0n ? `${r} never became a covenant: its edition had closed, so the ${tree(a.toReserve)} its space held go to the Overcharge Reserve.`
-    : `${r} never became a covenant: its ${ha(a.landYears)} ha-yr in edition ${n(a.edition)} return to that edition.`, true],
+  "editions.Reserved": (a, r) => ["term", `${r} signs up for ${ha(a.landYears)} ha-yr: it holds no room until its watchdog closes.`],
+  "editions.Placed": (a, r) => ["term", `${r}'s watchdog has closed: it takes its place, ${ha(a.landYears)} ha-yr in edition ${n(a.edition)}.`, true],
+  "editions.Moved": (a, r) => ["term", `Room free in edition ${n(a.to)} goes to the earliest unlisted land that fits: ${r} moves up from edition ${n(a.from)}, at the earlier edition's reward.`],
+  "editions.EditionSettling": (a) => ["alert", `Edition ${n(a.edition)} is full and settling: the next edition opens, and room released in it goes to unlisted land from the editions after it.`],
+  "editions.Fixed": (a, r) => ["term", `${r} is listed: its edition, ${n(a.edition)}, and its reward are fixed.`, true],
+  "editions.Sold": (a, r) => ["term", `${r} is sold in edition ${n(a.edition)}: ${tree(a.allocation)} over its term at an EcoScore of 100${a.excess > 0n ? `, the ${tree(a.excess)} above the per-land cap dropped to the Relics` : ""}.`, true],
+  "editions.Released": (a, r) => ["money", `${r} never became a covenant: its ${ha(a.landYears)} ha-yr in edition ${n(a.edition)} return to that edition.`, true],
   "parties.RequestRejected": (a, r) => ["lifecycle", `${nameOf(a.verifier)} rejects ${r}: ${["", "the land is not found", "it has no valid title", "no access was given"][n(a.reason)] ?? "a rejection"}. A 1A challenge may overturn it in the watchdog.`],
-  "editions.EditionOpened": (a) => ["alert", `Edition ${n(a.edition)} opens: its ${Math.round(n(a.clock) / YEAR)}-year clock starts.`],
-  "editions.EditionClosed": (a) => ["alert", a.byClock
-    ? `Edition ${n(a.edition)}'s clock is up: the ${tree(a.toReserve)} of room no request took go to the Overcharge Reserve; its ${ha(BigInt(a.placed) - BigInt(a.sold))} ha-yr placed and not yet sold can still sell.`
-    : `Edition ${n(a.edition)} is sold out and closes.`],
+  "editions.EditionOpened": (a) => ["alert", `Edition ${n(a.edition)} opens, at step ${n(a.step)}: 10,000,000 new TR3 for land.`],
+  "editions.EditionClosed": (a) => ["alert", `Every place in edition ${n(a.edition)} has activated: it closes${a.dropped > 0n ? `, and the ${tree(a.dropped)} of its room never sold drop to the Relics` : ""}.`],
+  "editions.Finished": () => ["alert", `Edition 32 is full: all 320,000,000 TR3 are placed, and no land enters again. Covenants stream on to their End Dates.`],
   "tree.StreamReleased": (a, r) => ["money", `${r} releases ${tree(a.amount)} at an EcoScore of ${n(a.score)}.`, true],
-  "tree.ReserveCredited": (a, r) => ["money", n(a.source) === 5
-    ? `${tree(a.amount)} of room an edition never placed goes to the Overcharge Reserve.`
-    : `${tree(a.amount)} of ${r}'s allocation goes to the Overcharge Reserve (${["the score's shortfall", "days blocked", "a breach", "an early end", "an unpaid boost"][n(a.source)]}).`, true],
-  "tree.BoostPaid": (a, r) => ["money", `${r} is boosted ${tree(a.amount)} from its overcharge.`, true],
-  "tree.BoostReturned": (a, r) => ["money", `${tree(a.amount)} of ${r}'s boost went unpaid and returns to the Reserve.`, true],
-  "tree.ReserveFinalized": (a) => ["alert", `The Overcharge Reserve is finalised: ${tree(a.amount)} are burned.`],
-  "overcharge.RelicMinted": (a, r) => ["term", `${r}'s EFT becomes a Relic of edition ${n(a.edition)} for ${nameOf(a.owner)}, with a cap of ${tree(a.cap)}.`],
-  "overcharge.OverchargeCommitted": (a, r) => ["money", `A Relic overcharges ${r}: m = ${(Number(a.mE6) / 1e6).toFixed(2)}, its land's TR3 +${Math.round(Number(a.mE6) / 1e4)}%, ${tree(a.commit)} committed from the Reserve.`],
-  "overcharge.CapReturned": (a, r) => ["money", `${r}'s boost ended with ${tree(a.cap)} unpaid: the cap comes back to ${nameOf(a.owner)} as an edition-${n(a.edition)} Relic.`],
-  "overcharge.RelicRetired": (a) => ["money", `${nameOf(a.owner)} retires a Relic: its ${tree(a.capLost)} of cap are lost.`, true],
-  "overcharge.Transmuted": (a) => ["money", `Two Relics are transmuted into one of edition ${n(a.edition)}, with a cap of ${tree(a.cap)}.`],
+  "tree.Dropped": (a, r) => ["money", `${tree(a.amount)} drop to the Relics${BigInt(a.tokenId) === 0n ? "" : ` from ${r}`} (${["the score's shortfall", "a breach at the end", "an early end", "an edition's room never sold", "a land's TR3 above 1,000,000"][n(a.source)]}), shared by points.`, true],
+  "tree.BoostPaid": (a, r) => ["money", `${r} mints ${tree(a.amount)} of a Relic's overcharge with its stream.`, true],
+  "tree.BoostCarried": (a, r) => ["money", `${tree(a.amount)} of an overcharge ${r} did not mint carry back to the Relic that committed it.`, true],
+  "overcharge.RelicBorn": (a, r) => ["term", `${r}'s Relic is born, in edition ${n(a.edition)}: it charges with the EFT, earning points as the land releases TR3.`, true],
+  "overcharge.RelicWoke": (a, r) => ["term", `${r}'s Relic wakes for ${nameOf(a.owner)}: ${tree(a.balance)} to spend on land still streaming.`],
+  "overcharge.RelicShattered": (a, r) => ["alert", n(a.permille) === 1000 ? `${r}'s Relic shatters: its ${tree(a.balance)} go back to all Relics and its points lapse.` : `An acquired part shatters ${n(a.permille) / 10}% of ${r}'s Relic: ${tree(a.balance)} back to all Relics.`],
+  "overcharge.OverchargeCommitted": (a, r) => ["money", `A Relic overcharges ${r}: M = ${(Number(a.multiplierE18) / 1e18).toFixed(2)}, ${tree(a.commit)} committed from its balance, paid with the land's stream at its score.`],
+  "overcharge.Transmuted": (a) => ["money", `Two Relics are forged into one of edition ${n(a.edition)}: ${tree(a.balance)} and their points together.`],
 
   // ---- TR3, resale ----
   "tree.RewardClaimed": (a, r) => ["money", a.patronAmount > 0n

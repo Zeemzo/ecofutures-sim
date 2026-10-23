@@ -421,7 +421,7 @@ function renderStrip() {
     $("sLandBar").style.width = `${pct}%`;
     $("sLandText").textContent = S.engine.landFull
       ? `Programme closed · all ${LAST_EDITION} editions`
-      : `${pct < 0.1 && pct > 0 ? "<0.1" : pct.toFixed(1)}% of the 21 editions' land placed · edition ${Math.min(S.census.edition, LAST_EDITION)} of ${LAST_EDITION}`;
+      : `${pct < 0.1 && pct > 0 ? "<0.1" : pct.toFixed(1)}% of the ${LAST_EDITION} editions' land placed · edition ${Math.min(S.census.edition, LAST_EDITION)} of ${LAST_EDITION}`;
   }
   const n = S.engine.anomalies.length;
   const a = $("sAnomalies");
@@ -446,8 +446,8 @@ function renderTicker() {
     item("EFTs sold", c.sold.toLocaleString("en-US"), "EFTs sold and still standing"),
     item("TR3 minted", money(c.tr3Supply, 2), "TR3 supply"),
     item("TR3 streaming", money(c.tr3Accruing, 2), "TR3 the covenants have streamed since their last settlement, at the EcoScore in force, up to what each one's last verification underwrote: claimable now, and minted when claimed. A late verifier's days wait at the horizon and are released by its verification, never forfeited"),
-    item("Till next edition", `${hectareYears(c.tillNextEdition)} ha-yr`, "Hectare-years of land still to place before the open edition fills; when its clock runs out it closes anyway"),
-    item("TR3 burned", money(c.burned, 2), "TR3 that will never be minted: an allocation's excess over the per-covenant cap of 1,000,000, and the Overcharge Reserve once it is finalised at the programme's end. Room an edition never placed, and a score's shortfall, go to the Reserve instead"),
+    item("Till next edition", `${hectareYears(c.tillNextEdition)} ha-yr`, "Hectare-years of land still to place before the open edition fills: no edition closes on time"),
+    item("TR3 in Relics", money(c.relics, 2), "Everything land did not earn -- the score's shortfall, what an early end left, an edition's room never sold, a land's TR3 above 1,000,000 -- shared among every Relic by its points. Nothing is ever burned: awake Relics spend it on land still streaming"),
   ].join("");
 }
 
@@ -751,7 +751,7 @@ async function renderDrawer(rid: number, force: boolean) {
   if (reward && reward.allocation > 0n && !reward.ended) facts.push(fact("TR3 streaming", `${money(reward.pending)} TR3 streamed since the last settlement, claimable now${reward.horizon ? `; the stream runs to ${dateOf(Number(reward.horizon))}, what the last verification underwrote` : ""}`));
   if (row.termStart) facts.push(fact("Term", `${dateOf(row.termStart)} to ${dateOf(row.termEnd!)}`));
   if (reward && reward.held) facts.push(fact("TR3", "stopped by a block or an upheld 3B: what accrues is held until it lifts"));
-  if (reward && reward.mE6 > 0n) facts.push(fact("Overcharged", `m = ${(Number(reward.mE6) / 1e6).toFixed(2)} (its land's TR3 +${Math.round(Number(reward.mE6) / 1e4)}%), ${money(reward.boostLeft)} TR3 of boost still to pay`));
+  if (reward && reward.boosts > 0n) facts.push(fact("Overcharged", `${reward.boosts} Relic${reward.boosts === 1n ? "" : "s"}: ${money(reward.boostCommitted)} TR3 committed, ${money(reward.boostPaid)} paid, ${money(reward.boostLeft)} still to stream`));
   let progress = "";
   if (row.total) {
     const pct = Math.round(((row.released ?? 0) / row.total) * 100);

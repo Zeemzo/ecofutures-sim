@@ -26,8 +26,10 @@ const count = async (req: Request) => {
     for (const r of Array.isArray(body) ? body : [body]) rpcCounts[r.method] = (rpcCounts[r.method] ?? 0) + 1;
   } catch {}
 };
-const serial = http(RPC, { retryCount: 0, onFetchRequest: count });
-const batched = http(RPC, { batch: { batchSize: 250, wait: 0 }, retryCount: 0, onFetchRequest: count });
+// RPC_TIMEOUT (ms): a long run's audit reads millions of logs; viem's default is 10 seconds
+const timeout = Number((globalThis as any).process?.env?.RPC_TIMEOUT || 10_000);
+const serial = http(RPC, { retryCount: 0, onFetchRequest: count, timeout });
+const batched = http(RPC, { batch: { batchSize: 250, wait: 0 }, retryCount: 0, onFetchRequest: count, timeout });
 export const pub = createPublicClient({ chain: foundry, transport: serial, cacheTime: 0 });
 export const bulk = createPublicClient({ chain: foundry, transport: batched, cacheTime: 0 });
 const wallet = createWalletClient({ chain: foundry, transport: serial });

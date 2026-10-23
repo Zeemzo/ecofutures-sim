@@ -31,15 +31,14 @@ export const ROLE_CALLS: Record<string, [Key, string][]> = {
     ["deeds", "recordRefusal"], ["deeds", "attest"], ["core", "verify"], ["core", "blockCovenant"], ["parties", "claimSeat"], ["parties", "acceptSeat"],
     ["parties", "approveLandSale"], ["challenge", "attestVerification"], ["challenge", "raise"], ["challenge", "respond"], ["challenge", "vote"], ["challenge", "withdraw"]],
   patron: [["usdt", "mint"], ["usdt", "approve"], ["market", "bid"], ["token", "list"], ["token", "buy"], ["token", "makeOffer"],
-    ["token", "acceptOffer"], ["tree", "claimPatron"], ["overcharge", "overcharge"], ["overcharge", "transmute"],
-    ["overcharge", "retireRelic"], ["overcharge", "releaseBoost"]],
+    ["token", "acceptOffer"], ["tree", "claimPatron"], ["overcharge", "overcharge"], ["overcharge", "transmute"]],
   "Trust Admin": [["admin", "addVerifier"], ["parties", "assignVerifier"], ["parties", "nominateVerifier"], ["deeds", "anchorPower"], ["deeds", "recordDocument"],
     ["deeds", "drawSecondSigning"], ["deeds", "recordReplacementPower"], ["deeds", "recordRestoration"], ["parties", "fileEnforcementCost"], ["registry", "lapseSale"],
     ["countries", "proposeSettings"], ["challenge", "vote"]],
   GTA: [["governance", "propose"], ["governance", "approve"], ["governance", "execute"], ["deeds", "attest"], ["challenge", "vote"]],
-  server: [["admin", "setKyc"], ["governance", "emergencyFreeze"], ["editions", "closeEditionIfDue"], ["editions", "promote"]],
-  keeper: [["market", "settleAuction"], ["market", "confirmSale"], ["registry", "closeUnsold"], ["core", "closeTerm"], ["challenge", "sweepReviewPool"],
-    ["overcharge", "mintRelic"], ["tree", "claimGuardian"]],
+  server: [["admin", "setKyc"], ["governance", "emergencyFreeze"], ["editions", "promote"]],
+  keeper: [["editions", "placeDue"], ["market", "settleAuction"], ["market", "confirmSale"], ["registry", "closeUnsold"], ["core", "closeTerm"],
+    ["challenge", "sweepReviewPool"]],
   foundation: [["governance", "proposeFeeSplit"], ["governance", "executeFeeSplit"], ["governance", "endExpiredFreeze"], ["bank", "releaseHeldHolderFees"]],
 };
 
@@ -48,8 +47,8 @@ export const ROLE_CALLS: Record<string, [Key, string][]> = {
  *  automatic unless the person asks for them too. */
 export const HOUSEKEEPING = new Set(["challenge.seatPanel", "challenge.redrawPanel", "challenge.lapse", "challenge.closeWindow",
   "challenge.sweepReviewPool", "market.settleAuction", "market.confirmSale", "registry.closeUnsold", "registry.lapseSale",
-  "deeds.lapse", "deeds.refundFees", "core.closeTerm", "core.closeEarly", "overcharge.mintRelic", "parties.lapseAccession",
-  "editions.closeEditionIfDue", "editions.promote", "governance.execute", "usdt.mint", "usdt.approve"]);
+  "deeds.lapse", "deeds.refundFees", "core.closeTerm", "core.closeEarly", "parties.lapseAccession",
+  "editions.placeDue", "editions.promote", "governance.execute", "usdt.mint", "usdt.approve"]);
 
 export class Control {
   actors = new Set<Address>();

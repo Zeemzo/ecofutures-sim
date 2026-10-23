@@ -7,7 +7,7 @@
 //   duration       seconds: typed "30d", "12h", "1y" (365 days), "1d12h", or seconds
 //   landUnits      hundredths of a hectare: typed "100" or "1 ha"
 //   landYears      hundredths of a hectare-year
-//   score 1-100, band 1-8, permille (70 = 7%), multiplierE6 (the boost m x 1e6: 618034 = +61.8%; typed "+61.8%" or "m 0.618"), holds (bits)
+//   score 1-100, band 1-8, permille (70 = 7%), multiplierE18 (a Relic's M x 1e18: typed "x5" or "5x"), holds (bits)
 //   enum:<Name>    a uint8 shown and chosen by name
 import { formatUnits } from "viem";
 import units from "./units.json";
@@ -85,13 +85,12 @@ export function parseTyped(kind: Kind, raw: string): bigint | number {
     if (!/^\d+$/.test(v)) throw new Error(`"${raw}" is not a land size (try 100 for 1 ha, or 1.5 ha)`);
     return Number(v);
   }
-  if (kind === "multiplierE6") {
-    // the boost m (Relic rules E2): what a Relic adds to the land's TR3, x 1e6
-    const pct = v.match(/^\+?(\d+(?:\.\d+)?)\s*%$/), m = v.match(/^m\s*=?\s*(\d+(?:\.\d+)?)$/i);
-    if (pct) return Number(decimal(pct[1], 4));
-    if (m) return Number(decimal(m[1], 6));
-    if (!/^\d+$/.test(v)) throw new Error(`"${raw}" is not a boost (try +61.8%, m 0.618, or 618034)`);
-    return Number(v);
+  if (kind === "multiplierE18") {
+    // a Relic's M (the 320M model), x 1e18
+    const x = v.match(/^x\s*(\d+(?:\.\d+)?)$/i) ?? v.match(/^(\d+(?:\.\d+)?)\s*x$/i);
+    if (x) return decimal(x[1], 18);
+    if (!/^\d+$/.test(v)) throw new Error(`"${raw}" is not a multiplier (try x5, 5x, or the raw value)`);
+    return BigInt(v);
   }
   const en = enumOf(kind);
   if (en) {
@@ -122,7 +121,7 @@ export function formatValue(kind: Kind | undefined, v: unknown): string {
   if (kind === "landUnits") return `${(Number(n) / 100).toLocaleString("en-US", { maximumFractionDigits: 2 })} ha (${n})`;
   if (kind === "landYears") return `${(Number(n) / 100).toLocaleString("en-US", { maximumFractionDigits: 2 })} ha·yr (${n})`;
   if (kind === "permille") return `${Number(n) / 10}% (${n}‰)`;
-  if (kind === "multiplierE6") return n === 0n ? "none (0)" : `m ${(Number(n) / 1e6).toLocaleString("en-US", { maximumFractionDigits: 4 })}, +${(Number(n) / 1e4).toLocaleString("en-US", { maximumFractionDigits: 2 })}% (${n})`;
+  if (kind === "multiplierE18") return n === 0n ? "none (0)" : `x${(Number(n) / 1e18).toLocaleString("en-US", { maximumFractionDigits: 4 })} (${n})`;
   if (kind === "holds") {
     const names = enumNames("Holds").filter(([, b]) => (Number(n) & b) !== 0).map(([k]) => k);
     return `${names.join(" | ") || "none"} (${n})`;
@@ -153,7 +152,7 @@ export function hintFor(kind: Kind | undefined): string | undefined {
     case "score": return "EcoScore 1–100";
     case "band": return "IUCN band 1–8";
     case "permille": return "per thousand: 70 = 7%";
-    case "multiplierE6": return "+61.8% (or 618034)";
+    case "multiplierE18": return "x5 (or the raw value x 1e18)";
     default: return undefined;
   }
 }

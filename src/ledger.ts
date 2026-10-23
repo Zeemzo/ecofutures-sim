@@ -182,8 +182,8 @@ export type Census = {
   /** TR3 the covenants have accrued since their last release, at the EcoScore in force (each released at its
    *  next passing re-verification), and TR3 released but not yet claimed. */
   tr3Accruing: bigint; tr3Owed: bigint;
-  /** The open edition's size in land-years, and the TR3 burned so far by editions closed with room left. */
-  capacity: bigint; burned: bigint;
+  /** The open edition's size in land-years, and the TR3 the Relics hold: everything land did not earn (320M model). */
+  capacity: bigint; relics: bigint;
 };
 
 /** Sold and still standing: not blocked, not cancelled (the platform's market cap counts these). */
@@ -197,7 +197,7 @@ export const INVARIANTS = [
   "No instalment runs ahead of a verification, nor past the term",
   "TR3 supply equals what was minted to patrons, guardians and referrers",
   "Every unit paid in was paid out to someone, or is still held",
-  "Every TR3 of the 210,000,000 is minted, owed, in the Reserve, committed, streaming, unplaced or burned",
+  "Every TR3 of the 320,000,000 is minted, owed, held by the Relics, committed to an overcharge, streaming or not yet sold",
 ];
 
 type Part = { row: Row; registry: bigint; deeds: bigint; market: bigint; bank: bigint; pool: bigint; ok: boolean; token: boolean; why?: string };
@@ -280,12 +280,11 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
     at("tree", "totalSupply"), at("tree", "mintedToPatrons"), at("tree", "mintedToGuardians"), at("tree", "mintedToReferrers"),
     at("editions", "currentEdition"), at("governance", "getGTAs"), at("token", "nextTokenId"),
     at("tree", "supplyBreakdown"), at("tree", "MAX_SUPPLY"),
-    ...Array.from({ length: 21 }, (_, i) => at("editions", "editionOf", [i + 1])),
+    ...Array.from({ length: 32 }, (_, i) => at("editions", "editionOf", [i + 1])),
   ]);
   // V12.1: the land-years reserved across the editions (sold or not), and the open edition's room for new requests
   const placed: bigint = eds.reduce((x: bigint, e: any) => x + BigInt(e.placed), 0n);
-  const open = Number(cur) <= 21 ? eds[Number(cur) - 1] : null;
-  const burned: bigint = sb.burned;
+  const open = Number(cur) >= 1 && Number(cur) <= 32 ? eds[Number(cur) - 1] : null;
   const held = await Promise.all([...ledger.heldFor].map((h) => at("bank", "heldForSuccessor", [h])));
   const bad: string[] = [];
   let registryHeld = 0n, deedsHeld = 0n, marketHeld = 0n, bankHeld = held.reduce((x: bigint, y: bigint) => x + y, 0n), poolHeld = 0n, ok3 = true, tokens = 0;
@@ -296,9 +295,9 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
   }
   const rows = parts.map((p) => p.row);
   // the unallocated remainder matches the space not yet sold to within rounding dust, kept (addendum, point 6)
-  const unplaced: bigint = await at("editions", "unallocatedTR3");
-  const parts7 = sb.minted + sb.owed + sb.reserve + sb.committed + sb.unstreamed + sb.unallocated + sb.burned;
-  const dust = sb.unallocated > unplaced ? sb.unallocated - unplaced : unplaced - sb.unallocated;
+  const unsold: bigint = await at("editions", "unallocatedTR3");
+  const parts7 = sb.minted + sb.owed + sb.relics + sb.committed + sb.unstreamed + sb.unallocated;
+  const dust = sb.unallocated > unsold ? sb.unallocated - unsold : unsold - sb.unallocated;
   const inv = [
     registryBal === registryHeld && deedsBal === deedsHeld,
     marketBal === marketHeld && bankBal === bankHeld,
@@ -316,8 +315,8 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
   // editionInfo: (edition, F, land-years placed in it, its size, opened at, closes by)
   const used: bigint = open ? BigInt(open.placed) : 0n, capacity: bigint = open ? BigInt(open.capacity) : 0n;
   return {
-    t, block, rows, edition: Number(cur), landYears: placed, tr3Supply: supply, gtas: gtas.length, capacity, burned,
-    registryBal, marketBal, bankBal, poolBal, registryHeld, marketHeld, bankHeld, poolHeld, deedsBal, deedsHeld, reserve: sb.reserve, inv, counts, bad,
+    t, block, rows, edition: Number(cur), landYears: placed, tr3Supply: supply, gtas: gtas.length, capacity, relics: sb.relics,
+    registryBal, marketBal, bankBal, poolBal, registryHeld, marketHeld, bankHeld, poolHeld, deedsBal, deedsHeld, reserve: sb.relics, inv, counts, bad,
     marketCap, sold, soldProjected, tillNextEdition: capacity > used ? capacity - used : 0n, tr3Accruing, tr3Owed: sb.owed,
   };
 }

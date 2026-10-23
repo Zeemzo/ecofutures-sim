@@ -113,7 +113,7 @@ export async function deploy(s: Scenario, progress: (msg: string) => void = () =
       {
         baseFee: BigInt(c.baseFee) * E18, deskRate: BigInt(c.deskRate) * E18, powerFee: BigInt(c.powerFee) * E18,
         agreementFee: BigInt(c.agreementFee) * E18, registrationFixed: BigInt(c.registrationFixed) * E18,
-        registrationPerHa: BigInt(c.registrationPerHa) * E18,
+        registrationPerHa: BigInt(c.registrationPerHa) * E18, fieldRate: BigInt(c.fieldRate ?? 0) * E18,
       },
     ]);
   }

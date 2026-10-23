@@ -1,6 +1,6 @@
 // The setup screen's Deployment tab: what "Deploy and set up" will deploy, before it does -- each contract with what
 // its initializer is given (deploy.ts's own plan), the constants compiled into its code (read from the bytecode on
-// the local chain, nothing deployed), and the 21 editions the edition scale makes.
+// the local chain, nothing deployed), and the 32 editions the edition scale makes.
 import { encodeDeployData, decodeFunctionResult, encodeFunctionData, keccak256, toBytes, type Abi, type AbiFunction, type Hex } from "viem";
 import { abis, bulk, type Key } from "./chain";
 import { initPlan } from "./deploy";
@@ -10,7 +10,7 @@ import code from "./bytecode.json";
 
 const C = (code as any).code as Record<string, Hex>;
 const LIMIT = 24_576;
-const LAST_EDITION = 21;
+const LAST_EDITION = 32;
 const TR3_PER_EDITION = 10_000_000;
 const INFO = new Map((surface as any).contracts.map((c: any) => [c.key, c]));
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
@@ -47,24 +47,24 @@ export function deploymentHtml(sc: Scenario): string {
     <p class="note">Fixed when the contracts were compiled; no setting changes them. Read from the bytecode on the local chain.</p>
     <div class="consts" id="constants"><p class="muted small">Reading…</p></div>
   </fieldset>
-  ${editionsHtml(k.editionScale, k.yearDays)}`;
+  ${editionsHtml(k.editionScale)}`;
 }
 
-/** The 21 editions of the TR3 model at an edition scale (land-years, hundredths of a hectare × years, per F²). */
-function editionsHtml(scale: number, yearDays: number): string {
+/** The 32 editions at an edition scale (land-years, hundredths of a hectare x years, per F(min(k, 10)) x F(k)). */
+function editionsHtml(scale: number): string {
   let totalHa = 0;
   const rows = Array.from({ length: LAST_EDITION }, (_, i) => {
-    const n = i + 1, F = fib(n);
-    const ha = (scale * F * F) / 100; // the edition's size in hectare-years
+    const n = i + 1, F = fib(n), G = fib(Math.min(n, 10));
+    const ha = (scale * G * F) / 100; // the edition's size in hectare-years
     totalHa += ha;
-    return `<tr><td class="num">${n}</td><td class="num">${num(F)}</td><td class="num">${num(ha, 2)}</td><td class="num">${rate(TR3_PER_EDITION / ha)}</td>
-      <td class="num">${num(Math.floor((10_000 * F) / 3) / 100, 2)} ha</td><td class="num">${num(100 * F)}</td><td class="num">${num((scale * F) / 10_000, 2)}</td></tr>`;
+    return `<tr><td class="num">${n}</td><td class="num">${num(G)} × ${num(F)}</td><td class="num">${num(ha, 2)}</td><td class="num">${rate(TR3_PER_EDITION / ha)}</td>
+      <td class="num">${num(Math.floor((10_000 * F) / 3) / 100, 2)} ha</td><td class="num">${num(100 * F)}</td><td class="num">${num((scale * G) / 10_000, 2)}</td></tr>`;
   }).join("");
   const production = scale === 100_000;
-  return `<fieldset><legend>The 21 editions</legend>
-    <p class="note">At an edition scale of ${num(scale)}${production ? " (production)" : `, ${num(scale / 100_000, 4)} × production`}. Each edition mints 10,000,000 TR3 across its land-years. Each land takes its place at sign-up, wholly, in the open edition; one that does not fit the room left goes to the next, which opens, and the 21st's last land takes the room left. An edition not sold out when its clock runs out (eight protocol years, 8 × ${num(yearDays, 2)} days, for every edition) closes anyway, and the TR3 of the room no land took goes to the Overcharge Reserve. TR3 at a score of 100; a covenant earns at most 1,000,000.</p>
-    <div class="table editions"><table><thead><tr><th>Edition</th><th>F</th><th>Holds (ha·yr)</th><th>TR3 per ha·yr</th><th>Largest plot</th><th>ha × years per title, at most</th><th>Full-size titles to fill</th></tr></thead>
-      <tbody>${rows}<tr class="total"><td colspan="2">All 21</td><td class="num">${num(totalHa, 2)}</td><td colspan="4">${num(TR3_PER_EDITION * LAST_EDITION)} TR3 in all</td></tr></tbody></table></div>
+  return `<fieldset><legend>The 32 editions</legend>
+    <p class="note">At an edition scale of ${num(scale)}${production ? " (production)" : `, ${num(scale / 100_000, 4)} × production`}. Each edition holds 10,000,000 TR3 across its land-years, F(min(n, 10)) × F(n) units of the scale: the genesis squares to Edition 9, then each edition divides the reward by 1.618. A land takes its place when its watchdog closes, wholly, in the open edition; one that does not fit the room left sends it to settling and goes to the next, which opens. No edition closes on time: a settling edition closes once every place in it has activated, and the TR3 of its room never sold drops to the Relics. When Edition 32 is full no land enters again: 320,000,000 TR3 in all, nothing ever burned. TR3 at a score of 100; a covenant earns at most 1,000,000.</p>
+    <div class="table editions"><table><thead><tr><th>Edition</th><th>F(min(n, 10)) × F(n)</th><th>Holds (ha·yr)</th><th>TR3 per ha·yr</th><th>Largest plot</th><th>ha × years per title, at most</th><th>Full-size titles to fill</th></tr></thead>
+      <tbody>${rows}<tr class="total"><td colspan="2">All 32</td><td class="num">${num(totalHa, 2)}</td><td colspan="4">${num(TR3_PER_EDITION * LAST_EDITION)} TR3 in all</td></tr></tbody></table></div>
   </fieldset>`;
 }
 

@@ -5,18 +5,20 @@ import { encodeAbiParameters, keccak256, maxUint256, zeroAddress, getAddress, ty
 import { read, send, sendMany, labelAddress, fund, addr, bulk, abis, type Key, type Call } from "./chain";
 import {
   DAY, YEAR, RequestStatus, Step, CovenantStatus, BlockReason, ChallengeState, Option, OptionName, Holds, Action,
-  Outcome, OutcomeName, Agreement, COMPLETED, Matter, register, nameOf, countryName, hectares,
+  Outcome, OutcomeName, Agreement, COMPLETED, Matter, register, nameOf, countryName, hectares, RelicState,
 } from "./model";
 import type { Scenario, Behaviour, CountryConfig } from "./config";
 import { Control } from "./control";
 
 const N = (x: unknown) => Number(x);
+/** TR3 (wei) as a short figure. */
+const tr3 = (x: unknown) => (Number(BigInt(x as bigint) / 10n ** 15n) / 1000).toLocaleString("en-US");
 const enc = (types: string[], values: unknown[]) =>
   encodeAbiParameters(types.map((type) => ({ type })), values as any);
 const h = (...parts: (string | number | bigint)[]) =>
   keccak256(enc(parts.map((p) => (typeof p === "string" ? "string" : "uint256")), parts.map((p) => (typeof p === "number" ? BigInt(p) : p))));
 
-export const LAST_EDITION = 21;
+export const LAST_EDITION = 32;
 
 // pre-mint fates
 const F = {
@@ -116,13 +118,11 @@ export class Engine {
   openChallenges: bigint[] = [];
   plan = new Map<bigint, number>();
   challengeOf = new Map<bigint, number>();
-  /** Relics waiting for their owner to use them. */
+  /** Awake Relics, for their owners to use: never burned, so kept after every use. */
   relics: { id: bigint; owner: Address; edition: number }[] = [];
-  /** The next Relic id not yet looked at: Relics are found by id, however they were minted -- from an End Date, a
-   *  transmutation, or a boost's cap returned (Relic rules E6). */
-  relicScan = 1n;
+  /** The next Relic id not yet looked at: every covenant's Relic is born at its activation and wakes at its End Date. */
   /** Each block of a boosted EFT on which its owner has decided whether to end the boost (E6), by token and block. */
-  boostDecided = new Set<string>();
+  relicSeen = new Set<bigint>();
   relicPass = 0;
   queuePass = 0;
   /** The next daily claim round (claimDays), and the covenants in it: request -> its EFT and its landowner. */
@@ -172,8 +172,8 @@ export class Engine {
   /** Arrivals have stopped and every request has run its course: the programme is over. */
   get finished(): boolean {
     const allDone = this.requests.length > 0 && this.arrivalsOver() && this.done.size === this.requests.length;
-    // a run that fills the editions ends with the programme: the Reserve finalised once the last edition has closed
-    return allDone && (!this.landFull || this.reserveFinalized);
+    // the programme never closes (TR3 Model B item 15): a run that fills the editions ends when every term has run
+    return allDone;
   }
 
   arrivalsOver(): boolean {
@@ -412,15 +412,15 @@ export class Engine {
   async tick(t: number): Promise<void> {
     this.now = t;
     this.volatile.clear();
-    // an edition whose eight years are up is closed now, so its burn lands when it falls due, not at the next placement
-    const open = N(await read("editions", "current"));
-    if (open <= LAST_EDITION && N(await read("editions", "currentEdition")) !== open) await this.act(this.server, "editions", "closeEditionIfDue", [], "closeEdition");
+    // no edition closes on time (TR3 Model B item 10): the keeper places every land whose watchdog has closed, in order
+    if ((await read<readonly bigint[]>("editions", "queued")).length) await this.act(this.keeper, "editions", "placeDue", [], "placeDue");
     const mean = YEAR / Math.max(0.1, this.b.arrivalsPerYear);
     while (!this.arrivalsOver() && t >= this.nextArrival) {
-      if (this.b.fillLand && N(await read("editions", "currentEdition")) > LAST_EDITION) {
+      const open = N(await read("editions", "current"));
+      if (this.b.fillLand && (open === 0 || open > LAST_EDITION)) {
         this.landFull = true;
         this.landFullAt = t;
-        this.note("land-full", 0, `All ${LAST_EDITION} editions are closed: the programme's TR3 is committed or burned. No more landowners are admitted; the covenants already made run out their terms.`);
+        this.note("land-full", 0, `Edition ${LAST_EDITION} has filled: all 320,000,000 TR3 are placed, and no land enters again. The covenants already made run out their terms.`);
         break;
       }
       await this.arrival();
@@ -448,16 +448,7 @@ export class Engine {
       await this.useRelics();
       this.relicPass = t + 30 * DAY;
     }
-    // the end of the programme: the last edition closed and every term ended, the Reserve is burned (OV1)
-    if (this.requests.length > 0 && this.done.size === this.requests.length && !this.reserveFinalized
-      && N(await read("editions", "currentEdition")) > LAST_EDITION && N(await read("tree", "liveCovenants")) === 0
-      && N(await read("editions", "openReservations")) === 0) {
-      const left = await read<bigint>("tree", "reserve");
-      if (await this.act(this.server, "tree", "finalizeReserve", [], "finalizeReserve")) {
-        this.reserveFinalized = true;
-        this.note("reserve", 0, `The programme is over: the Overcharge Reserve is finalised and its ${(Number(left / 10n ** 15n) / 1000).toLocaleString("en-US")} TR3 are burned.`);
-      }
-    }
+
   }
 
   /** The earliest moment anyone has something to do. */
@@ -469,7 +460,6 @@ export class Engine {
     if (this.b.claimDays > 0 && this.inTerm.size) m = Math.min(m, this.claimPass);
     if (this.b.governanceCalendar) m = Math.min(m, this.start + (this.govStage + 1) * this.calendarYear());
     for (const x of [this.emergencyEndAt, this.unfreezeAt, this.feeSplitAt]) if (x) m = Math.min(m, x);
-    if (this.landFull && !this.reserveFinalized && this.done.size === this.requests.length) m = Math.min(m, this.now + 30 * DAY);
     return Number.isFinite(m) ? m : this.now + 30 * DAY;
   }
 
@@ -485,11 +475,9 @@ export class Engine {
       this.note("refused", 0, `A landowner in ${countryName(country)} is turned away: the country is suspended.`);
       return 0;
     }
-    const cur = N(await read("editions", "currentEdition"));
-    if (cur > LAST_EDITION) {
-      this.note("refused", 0, `A landowner in ${countryName(country)} is turned away: all ${LAST_EDITION} editions are closed.`);
-      return 0;
-    }
+    // sign-ups never close (item 15): in a gap the land is checked against the next edition's limits
+    let cur = N(await read("editions", "current"));
+    if (cur === 0) cur = N(await read("editions", "last")) + 1;
     const minLand = N(await read("editions", "minLandUnits"));
     // the largest title any edition takes; plots that "grow with the editions" stay within the open edition's limit
     // and, at the small edition scales those runs use, within an eighth of its room: about the per-land cap's share
@@ -826,20 +814,18 @@ export class Engine {
 
   private corrected = new Set<number>();
 
-  /** The covenant's Holder files its cost of making good a breach: a share of the consideration still to come. */
+  /** The covenant's Holder files its cost of making good a breach: a part of the landowner's share still held (item 9:
+   *  recovered from that share after the cure). */
   async fileEnforcement(rid: number, tid: bigint, c: any, holder: Address) {
     // one claim at a time: an earlier one still being recovered comes first
     const [, outstanding] = await read<[Address, bigint, number, boolean, bigint]>("bank", "setOffOf", [tid]);
     if (outstanding !== 0n) return;
     const acct = await read("bank", "getAccount", [tid]);
-    const part: bigint = await read("bank", "considerationPart", [BigInt(c.requestId)]);
-    const total = BigInt(acct.consideration) * BigInt(c.termYears);
-    const paid = BigInt(acct.considerationYears) * BigInt(acct.consideration) + part;
-    const toCome = total > paid ? total - paid : 0n;
-    const amount = (toCome * BigInt(10 + this.rand(50))) / 100n;
+    const share = (BigInt(acct.balance) * 900n) / 990n; // the landowner's share of what is still held, near enough
+    const amount = (share * BigInt(10 + this.rand(50))) / 100n;
     if (amount === 0n) return;
     if (await this.act(holder, "parties", "fileEnforcementCost", [tid, amount, h("enforcement receipts", rid), `ipfs://receipts/${rid}/enforcement`], "enforcementCost", rid)) {
-      this.note("enforcement", rid, `${nameOf(holder)} makes good the breach on #${rid} and files its cost: it comes out of the landowner's yearly consideration after the cure.`);
+      this.note("enforcement", rid, `${nameOf(holder)} makes good the breach on #${rid} and files its cost: it comes out of the landowner's share after the cure.`);
     }
   }
 
@@ -875,8 +861,8 @@ export class Engine {
   /** Requests whose unused fees 3-5 the keeper has sent back (or found nothing to send). */
   private feesRefunded = new Set<number>();
 
-  /** A starting price the Market accepts: at least the yearly floor (FM p8). It is paid twice a year once it reaches
-   *  both USD 500 x (2T + 1) and the twice-a-year floor (O2), else yearly. */
+  /** A starting price the Market accepts: at least the yearly floor, max(J x T x 100, T x fee 1 / 0.07) at the request's
+   *  fees (TR3 Model B item 9). It is paid twice a year from floor(2), else yearly. */
   /** What the landowner asks: the land's worth to patrons -- hectares x years x the country's value, give or take
    *  -- and never below the protocol's floor, which a small plot's price sits a little above. */
   async startPrice(country: number, land: bigint, term: number): Promise<bigint> {
@@ -949,6 +935,12 @@ export class Engine {
     if (t + length > N(deadline) || listed >= 3) { this.nextAt.set(rid, closeAt + 1); return; }
     const c = await read("core", "getCovenant", [tid]);
     if (N(c.status) !== CovenantStatus.MINTED) { this.nextAt.set(rid, t + 7 * DAY); return; }
+    // the 320M model: once Edition 32 is full a land with no place can never be listed; it closes unsold
+    if (N((await read("editions", "reservationOf", [BigInt(rid)])).edition) === 0 && (await read<boolean>("editions", "finished"))) {
+      this.note("edition", rid, `Edition 32 is full: #${rid} never takes a place, and closes unsold when its listing window ends.`);
+      this.nextAt.set(rid, closeAt + 1);
+      return;
+    }
     const start = await this.startPrice(N(c.country), c.landUnits, N(c.termYears));
     if (await this.act(c.guardian, "market", "listForAuction", [tid, start, 0n, BigInt(length)], "list", rid)) {
       this.listings.set(rid, listed + 1);
@@ -1015,7 +1007,6 @@ export class Engine {
 
     // ---- a block ----
     if (status === CovenantStatus.BLOCKED) {
-      await this.maybeReleaseBoost(rid, tid, c);
       const reason = N(c.blockReason);
       if (reason === BlockReason.DEED) { await this.restoreDeed(rid, tid, c, holder, holderCan, st); return; }
       // a vacant seat is filled first, and a term that is over goes to its End Date: both are reached below
@@ -1159,54 +1150,40 @@ export class Engine {
       if (!(await this.act(this.keeper, "challenge", "sweepReviewPool", [tid], "sweep", rid))) { this.nextAt.set(rid, t + 7 * DAY); return; }
     }
     await this.claimTR3(rid, tid, true); // the End Date: the last owner takes its pool
-    const [, , toEndDate] = await read<[number, bigint, boolean]>("tree", "relicSource", [tid]);
-    if (toEndDate && (await read<bigint>("overcharge", "relicOf", [tid])) === 0n) {
-      const id = await read<bigint>("overcharge", "nextRelicId");
-      if (await this.act(this.keeper, "overcharge", "mintRelic", [tid], "mintRelic", rid)) {
-        const relic = await read("overcharge", "getRelic", [id]);
-        const owner = getAddress(await read<Address>("overcharge", "ownerOf", [id]));
-        this.relics.push({ id, owner, edition: N(relic.edition) });
-        this.note("relic", rid, `#${rid}'s EFT becomes a Relic of edition ${N(relic.edition)} for ${nameOf(owner)}, worth up to ${(Number(relic.cap / 10n ** 15n) / 1000).toLocaleString("en-US")} TR3 of boost.`);
+    // the 320M model: the Relic born at activation woke at a completed End Date, or shattered
+    const relicId = await read<bigint>("overcharge", "relicOf", [tid]);
+    if (relicId !== 0n && !this.relicSeen.has(relicId)) {
+      this.relicSeen.add(relicId);
+      const relic = await read("overcharge", "getRelic", [relicId]);
+      if (N(relic.state) === RelicState.AWAKE) {
+        const owner = getAddress(await read<Address>("overcharge", "ownerOf", [relicId]));
+        this.relics.push({ id: relicId, owner, edition: N(relic.edition) });
+        this.note("relic", rid, `#${rid}'s Relic wakes for ${nameOf(owner)}: edition ${N(relic.edition)}, ${tr3(relic.balance)} TR3 to spend, ${tr3(relic.points)} points.`);
+      } else if (N(relic.state) === RelicState.SHATTERED) {
+        this.note("relic", rid, `#${rid}'s Relic shatters: its balance goes back to all Relics and its points lapse.`);
       }
     }
     this.note("complete", rid, `#${rid} is complete: every instalment released, the review pool settled.`);
     this.done.add(rid);
   }
 
-  /** Relic owners apply a Relic to an EFT they own that is still in its first interval (Relic rules E1), at the quote's
-   *  commit less 5%; a Relic keeps what its commits leave of its cap. Two of the same edition are sometimes transmuted
-   *  into one an edition lower, and a Relic with only dust left is sometimes retired. */
+  /** Owners of awake Relics overcharge an EFT they own whose land still streams, where it commits the most, at the
+   *  quote's commit less 5%; what the land does not mint carries back to the Relic, which is never burned (the 320M
+   *  model). Two of the same edition (2 or later) are sometimes forged into one an edition lower, adding their points
+   *  and balances. */
   async useRelics() {
-    // every Relic minted since the last pass: from an End Date, a transmutation, or a boost's cap returned (E6)
-    const next = await read<bigint>("overcharge", "nextRelicId");
-    for (; this.relicScan < next; this.relicScan++) {
-      const id = this.relicScan;
-      if (this.relics.some((r) => r.id === id)) continue;
-      const owner = await read<Address>("overcharge", "ownerOf", [id]).catch(() => null);
-      if (!owner) continue; // burned already
-      this.relics.push({ id, owner: getAddress(owner), edition: N((await read("overcharge", "getRelic", [id])).edition) });
-    }
     const keep: { id: bigint; owner: Address; edition: number }[] = [];
     for (const r of this.relics) {
       if (!this.chance(this.b.relicUsePct)) { keep.push(r); continue; }
-      const cap = BigInt((await read("overcharge", "getRelic", [r.id])).cap);
-      if (cap < 10n * 10n ** 18n && this.rand(5) === 0) {
-        if (await this.act(r.owner, "overcharge", "retireRelic", [r.id], "retireRelic")) {
-          this.note("relic", 0, `${nameOf(r.owner)} retires an edition-${r.edition} Relic with ${(Number(cap / 10n ** 15n) / 1000).toLocaleString("en-US")} TR3 of cap left: it is burned, and the cap with it.`);
+      const twin = keep.find((x) => x.owner === r.owner && x.edition === r.edition && r.edition >= 2);
+      if (twin && this.rand(3) === 0) {
+        if (await this.act(r.owner, "overcharge", "transmute", [twin.id, r.id], "transmute")) {
+          twin.edition = r.edition - 1; // twin survives, an edition lower
+          this.note("relic", 0, `${nameOf(r.owner)} forges two edition-${r.edition} Relics into one of edition ${r.edition - 1}: their points and balances add.`);
           continue;
         }
       }
-      const twin = keep.find((x) => x.owner === r.owner && x.edition === r.edition && r.edition >= 2);
-      if (twin && this.rand(3) === 0) {
-        const id = await read<bigint>("overcharge", "nextRelicId");
-        if (await this.act(r.owner, "overcharge", "transmute", [twin.id, r.id], "transmute")) {
-          keep.splice(keep.indexOf(twin), 1);
-          keep.push({ id, owner: r.owner, edition: r.edition - 1 });
-          this.note("relic", 0, `${nameOf(r.owner)} transmutes two edition-${r.edition} Relics into one of edition ${r.edition - 1}.`);
-        }
-        continue;
-      }
-      let used = false, left = cap;
+      let best: { rid: number; tid: bigint; mult: bigint; commit: bigint } | null = null;
       for (const rid of this.requests) {
         if (this.done.has(rid)) continue;
         const req = await read("registry", "getRequest", [BigInt(rid)]);
@@ -1215,36 +1192,17 @@ export class Engine {
         const c = await read("core", "getCovenant", [tid]);
         if (N(c.status) !== CovenantStatus.ACTIVE || this.now + DAY >= N(c.termEnd)) continue; // a day's margin
         if (getAddress(await read<Address>("token", "ownerOf", [tid])) !== r.owner) continue;
-        if ((await read("bank", "getAccount", [tid])).holds !== 0) continue;
-        const [mE6, , , , , commit, fresh] = await read<[bigint, bigint, bigint, bigint, bigint, bigint, boolean]>("overcharge", "quoteOvercharge", [tid, r.id]);
-        if (!fresh || mE6 === 0n || commit === 0n) continue; // E1: only in the first interval, before its first re-verification falls due
-        const rw = await read("tree", "rewardOf", [tid]);
-        if (rw.mE6 !== 0n || rw.held) continue;
-        if (await this.act(r.owner, "overcharge", "overcharge", [tid, r.id, (commit * 95n) / 100n], "overcharge", rid)) {
-          left = BigInt((await read("overcharge", "getRelic", [r.id])).cap);
-          this.note("overcharge", rid, `${nameOf(r.owner)} applies its edition-${r.edition} Relic to #${rid}: m = ${(Number(mE6) / 1e6).toFixed(2)} (its land's TR3 +${Math.round(Number(mE6) / 1e4)}%), ${(Number(commit / 10n ** 15n) / 1000).toLocaleString("en-US")} TR3 committed from the Reserve${left > 0n ? `; the Relic keeps ${(Number(left / 10n ** 15n) / 1000).toLocaleString("en-US")} TR3 of its cap` : ", the whole of its cap: the Relic is burned"}.`);
-          used = true;
-          break;
-        }
+        const [mult, , , commit] = await read<[bigint, bigint, bigint, bigint]>("overcharge", "quoteOvercharge", [tid, r.id]);
+        if (mult === 0n || commit < 10n ** 18n) continue; // land still streaming, room for at least 1 TR3
+        if (!best || commit > best.commit) best = { rid, tid, mult, commit };
       }
-      if (!used || left > 0n) keep.push(r);
+      if (best && await this.act(r.owner, "overcharge", "overcharge", [best.tid, r.id, (best.commit * 95n) / 100n], "overcharge", best.rid)) {
+        const M = Number(best.mult) / 1e18;
+        this.note("overcharge", best.rid, `${nameOf(r.owner)} overcharges #${best.rid} with its edition-${r.edition} Relic: M = ${M.toFixed(2)}, ${tr3(best.commit)} TR3 committed from the Relic, paid with the land's stream at its score; what it does not mint carries back.`);
+      }
+      keep.push(r);
     }
     this.relics = keep;
-  }
-
-  /** Relic rules E6: while a breach, Deed or partition block stands on a boosted EFT, its owner may end the boost at
-   *  once -- what the commitment has not paid returns to the Reserve, its cap to the owner as a Relic. Decided once per
-   *  block. */
-  async maybeReleaseBoost(rid: number, tid: bigint, c: any) {
-    const key = `${tid}:${N(c.blockedAt)}`;
-    if (this.boostDecided.has(key)) return;
-    this.boostDecided.add(key);
-    const rw = await read("tree", "rewardOf", [tid]);
-    if (rw.mE6 === 0n || rw.boostLeft === 0n || rw.ended || !this.chance(this.b.releaseBoostPct)) return;
-    const owner = getAddress(await read<Address>("token", "ownerOf", [tid]));
-    if (await this.act(owner, "overcharge", "releaseBoost", [tid], "releaseBoost", rid)) {
-      this.note("overcharge", rid, `#${rid} is blocked: ${nameOf(owner)} ends its boost, and the ${(Number(BigInt(rw.boostLeft) / 10n ** 15n) / 1000).toLocaleString("en-US")} TR3 it had not paid return to the Reserve, the cap to ${nameOf(owner)} as a Relic.`);
-    }
   }
 
   // What each due request's first look reads, fetched for all of them at once at the start of a tick.
@@ -1553,11 +1511,11 @@ export class Engine {
       const E = 10n ** 18n;
       const fees = {
         baseFee: BigInt(c.baseFee) * E, deskRate: BigInt(c.deskRate) * E, powerFee: BigInt(c.powerFee) * E, agreementFee: BigInt(c.agreementFee) * E,
-        registrationFixed: BigInt(c.registrationFixed) * E, registrationPerHa: BigInt(perHa) * E,
+        registrationFixed: BigInt(c.registrationFixed) * E, registrationPerHa: BigInt(perHa) * E, fieldRate: BigInt(c.fieldRate ?? 0) * E,
       };
       const payload = encodeAbiParameters([{ type: "uint16" }, { type: "tuple", components: [
         { name: "baseFee", type: "uint96" }, { name: "deskRate", type: "uint96" }, { name: "powerFee", type: "uint96" }, { name: "agreementFee", type: "uint96" },
-        { name: "registrationFixed", type: "uint96" }, { name: "registrationPerHa", type: "uint96" }] }], [c.code, fees]);
+        { name: "registrationFixed", type: "uint96" }, { name: "registrationPerHa", type: "uint96" }, { name: "fieldRate", type: "uint96" }] }], [c.code, fees]);
       if (await this.countryVote(Matter.SET_FEES, c.code, payload, `set ${c.name}'s fees`)) c.registrationPerHa = perHa;
     } else if (y === 4) {
       const target = tas(second)[1] ?? tas(second)[0];
@@ -1620,16 +1578,16 @@ export class Engine {
     }
   }
 
-  /** A country vote: the GTAs and the country's own Trust Admins (not frozen), more than half of them (FM p19; Ravi,
-   *  10 Oct). A GTA proposes; the others and the country's Trust Admins vote until it carries. */
+  /** A country vote: two blocs, each by its own majority -- the seated GTAs and the country's own Trust Admins (not
+   *  frozen; TR3 Model B item 11). A GTA proposes; the others and the country's Trust Admins vote until both carry. */
   async countryVote(matter: number, country: number, payload: `0x${string}`, label: string, excluded: Address = zeroAddress): Promise<boolean> {
     const gtas = (await this.q<Address[]>("governance", "getGTAs")).map((a) => getAddress(a));
     const id = (await read<bigint>("governance", "countryVoteCount")) + 1n;
     if (!(await this.act(gtas[0], "governance", "proposeCountryVote", [matter, payload], `propose ${label}`))) return false;
     const electors = [...gtas.slice(1), ...(this.countryHolders.get(country) ?? []).filter((x) => x !== excluded)];
     for (const v of electors) {
-      const [votes, needed] = await read<[bigint, bigint]>("governance", "countryVotesOf", [id]);
-      if (votes >= needed) break;
+      const [cv, cn, hv, hn] = await read<[bigint, bigint, bigint, bigint]>("governance", "countryVotesOf", [id]);
+      if (cv >= cn && hv >= hn) break;
       await this.attempt(v, "governance", "voteCountry", [id]);
     }
     return this.act(this.server, "governance", "executeCountryVote", [id], label);
@@ -1673,18 +1631,19 @@ export class Engine {
    * it; the server does.
    */
   async promoteQueue(): Promise<void> {
-    const top = Math.min(N(await read("editions", "current")), LAST_EDITION);
+    const open = N(await read("editions", "current"));
+    const top = open === 0 ? N(await read("editions", "last")) : open;
     if (top <= 1) return;
     const eds = await Promise.all(Array.from({ length: top - 1 }, (_, i) => read("editions", "editionOf", [i + 1])));
     // SETTLING (2) with room; an OPEN edition below the top cannot be
     if (!eds.some((E: any) => N(E.state) === 2 && BigInt(E.capacity) > BigInt(E.placed))) return;
-    const waiting = new Map<number, { id: bigint; ly: bigint }[]>();
+    const waiting = new Map<number, { id: bigint; ly: bigint; seq: bigint }[]>();
     for (let k = 2; k <= top; k++) {
       const ids = await read<readonly bigint[]>("editions", "waitingIn", [k]);
-      const list: { id: bigint; ly: bigint }[] = [];
+      const list: { id: bigint; ly: bigint; seq: bigint }[] = [];
       for (const id of ids) {
-        if (!this.lyOf.has(id)) this.lyOf.set(id, BigInt((await read("editions", "reservationOf", [id])).landYears));
-        list.push({ id, ly: this.lyOf.get(id)! });
+        const r = await read("editions", "reservationOf", [id]);
+        list.push({ id, ly: BigInt(r.landYears), seq: BigInt(r.seq) });
       }
       waiting.set(k, list);
     }
@@ -1694,15 +1653,15 @@ export class Engine {
         if (N(E.state) !== 2) break;
         const limit = BigInt(await read("editions", "limitOf", [e]));
         const room = BigInt(E.capacity) - BigInt(E.placed);
-        let best: { id: bigint; ly: bigint; k: number } | null = null;
+        let best: { id: bigint; ly: bigint; seq: bigint; k: number } | null = null;
         for (let k = e + 1; k <= top; k++) {
-          for (const w of waiting.get(k) ?? []) if (w.ly <= limit && w.ly <= room && (!best || w.id < best.id)) best = { ...w, k };
+          for (const w of waiting.get(k) ?? []) if (w.ly <= limit && w.ly <= room && (!best || w.seq < best.seq)) best = { ...w, k };
         }
         if (!best) break;
         if (!(await this.act(this.server, "editions", "promote", [best.id, e], "promote", N(best.id)))) break;
-        this.note("queue", N(best.id), `Room free in edition ${e} goes to the earliest waiting request that fits it: #${best.id} moves down from edition ${best.k}.`);
+        this.note("queue", N(best.id), `Room free in edition ${e} goes to the next unlisted land that fits it: #${best.id} moves up from edition ${best.k}, at edition ${e}'s reward.`);
         waiting.set(best.k, (waiting.get(best.k) ?? []).filter((w) => w.id !== best!.id));
-        (waiting.get(e) ?? waiting.set(e, []).get(e)!).push({ id: best.id, ly: best.ly });
+        (waiting.get(e) ?? waiting.set(e, []).get(e)!).push({ id: best.id, ly: best.ly, seq: best.seq });
       }
     }
   }
