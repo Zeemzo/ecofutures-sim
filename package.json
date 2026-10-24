@@ -1,7 +1,7 @@
 {
   "name": "ecofutures-simulator",
   "private": true,
-  "version": "2.5.0",
+  "version": "2.5.1",
   "type": "module",
   "scripts": {
     "abis": "node scripts/abis.mjs && node scripts/surface.mjs",
