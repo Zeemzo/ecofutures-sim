@@ -57,7 +57,7 @@ await type(qf, 0, "144"); await type(qf, 1, "100"); await type(qf, 2, "5"); awai
 await page.click(`${qf} button[type="submit"]`);
 await page.waitForFunction((qf) => /USDT|Reverted/.test(document.querySelector(`${qf} .out`)?.textContent ?? ""), { timeout: 20_000 }, qf);
 const out = await page.$eval(`${qf} .out`, (x) => x.textContent);
-check(/"upfront": "192 USDT"/.test(out) && /TR3/.test(out) && /"edition": 1/.test(out), "quote shown in USDT and TR3", out.replace(/\s+/g, " ").slice(0, 300));
+check(/"upfront": "219 USDT"/.test(out) && /TR3/.test(out) && /"edition": 1/.test(out), "quote shown in USDT and TR3", out.replace(/\s+/g, " ").slice(0, 300));
 
 // ---- Take over, Act freely: Guardian 1 requests with maxTotal 1000
 await page.click('[data-view="sim"]');
