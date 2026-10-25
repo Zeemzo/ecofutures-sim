@@ -43,6 +43,9 @@ export class Ledger {
     const a = e.args;
     if (a.requestId !== undefined) return Number(a.requestId);
     if (a.tokenId !== undefined) return this.reqOfToken.get(a.tokenId) ?? 0;
+    // EcoOvercharge names a covenant by its EFT: the land of a record, the target of an overcharge (TR3 Model 4)
+    if (a.land !== undefined) return this.reqOfToken.get(a.land) ?? 0;
+    if (a.target !== undefined) return this.reqOfToken.get(a.target) ?? 0;
     if (a.challengeId) return this.reqOfChallenge.get(a.challengeId) ?? 0;
     return 0;
   }
@@ -168,22 +171,26 @@ export type Row = {
 };
 
 export type Census = {
-  t: number; block: bigint; rows: Row[]; edition: number; landYears: bigint; tr3Supply: bigint; gtas: number;
+  /** `placed`: the TR3 given to land placed in the editions so far (TR3 Model 4: each edition's room is in TR3). */
+  t: number; block: bigint; rows: Row[]; edition: number; placed: bigint; tr3Supply: bigint; gtas: number;
   registryBal: bigint; marketBal: bigint; bankBal: bigint; poolBal: bigint; registryHeld: bigint; marketHeld: bigint;
-  bankHeld: bigint; poolHeld: bigint; reserve: bigint;
+  bankHeld: bigint; poolHeld: bigint;
   /** EcoDeeds' balance, and the fees 3-5 its requests record as not yet paid out or refunded. */
   deedsBal: bigint; deedsHeld: bigint;
   inv: boolean[]; counts: Record<Stage, number>;
   /** Requests whose instalments run ahead of their verifications or past their term (invariant 4). */
   bad: string[];
   /** The platform's home-page indicators: the sale prices of the EFTs sold and still standing, how many, the TR3
-   *  those lands will mint over their terms, and the land-years before the next edition begins. */
+   *  those lands will mint over their terms, and the open edition's room: the TR3 still to place before it fills. */
   marketCap: bigint; sold: number; soldProjected: bigint; tillNextEdition: bigint;
   /** TR3 the covenants have accrued since their last release, at the EcoScore in force (each released at its
    *  next passing re-verification), and TR3 released but not yet claimed. */
   tr3Accruing: bigint; tr3Owed: bigint;
-  /** The open edition's size in land-years, and the TR3 the Relics hold: everything land did not earn (320M model). */
-  capacity: bigint; relics: bigint;
+  /** The open edition's size in square-metre-years; the TR3 the records and gems hold (TR3 Model 4 §6), and what
+   *  stones have committed to land and not yet minted or returned. */
+  capacity: bigint; held: bigint; committed: bigint;
+  /** Lands verified and waiting for their place, in turn (Model 4 §3). */
+  waiting: number;
 };
 
 /** Sold and still standing: not blocked, not cancelled (the platform's market cap counts these). */
@@ -197,7 +204,7 @@ export const INVARIANTS = [
   "No instalment runs ahead of a verification, nor past the term",
   "TR3 supply equals what was minted to patrons, guardians and referrers",
   "Every unit paid in was paid out to someone, or is still held",
-  "Every TR3 of the 320,000,000 is minted, owed, held by the Relics, committed to an overcharge, streaming or not yet sold",
+  "Every TR3 of the 320,000,000 is in an edition not yet open, room, placed and not yet active, unstreamed, owed, minted, held by the records and gems, or committed to an overcharge (TR3 Model 4 §10)",
 ];
 
 type Part = { row: Row; registry: bigint; deeds: bigint; market: bigint; bank: bigint; pool: bigint; ok: boolean; token: boolean; why?: string };
@@ -274,15 +281,15 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
     if (done.has(rid)) finalParts.set(rid, p);
     return p;
   }));
-  const [registryBal, marketBal, bankBal, poolBal, deedsBal, supply, mp, mg, mr, cur, gtas, nextToken, sb, maxSupply, ...eds] = await Promise.all([
+  const [registryBal, marketBal, bankBal, poolBal, deedsBal, supply, mp, mg, mr, cur, gtas, nextToken, sb, maxSupply, waiting, ...eds] = await Promise.all([
     at("usdt", "balanceOf", [addr.registry]), at("usdt", "balanceOf", [addr.market]), at("usdt", "balanceOf", [addr.bank]),
     at("usdt", "balanceOf", [addr.challenge]), at("usdt", "balanceOf", [addr.deeds]),
     at("tree", "totalSupply"), at("tree", "mintedToPatrons"), at("tree", "mintedToGuardians"), at("tree", "mintedToReferrers"),
     at("editions", "currentEdition"), at("governance", "getGTAs"), at("token", "nextTokenId"),
-    at("tree", "supplyBreakdown"), at("tree", "MAX_SUPPLY"),
+    at("lens", "supply"), at("tree", "MAX_SUPPLY"), at("lens", "waiting"),
     ...Array.from({ length: 32 }, (_, i) => at("editions", "editionOf", [i + 1])),
   ]);
-  // V12.1: the land-years reserved across the editions (sold or not), and the open edition's room for new requests
+  // the TR3 given to land placed across the editions (sold or not), and the open edition's room
   const placed: bigint = eds.reduce((x: bigint, e: any) => x + BigInt(e.placed), 0n);
   const open = Number(cur) >= 1 && Number(cur) <= 32 ? eds[Number(cur) - 1] : null;
   const held = await Promise.all([...ledger.heldFor].map((h) => at("bank", "heldForSuccessor", [h])));
@@ -294,10 +301,8 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
     if (p.token) tokens++;
   }
   const rows = parts.map((p) => p.row);
-  // the unallocated remainder matches the space not yet sold to within rounding dust, kept (addendum, point 6)
-  const unsold: bigint = await at("editions", "unallocatedTR3");
-  const parts7 = sb.minted + sb.owed + sb.relics + sb.committed + sb.unstreamed + sb.unallocated;
-  const dust = sb.unallocated > unsold ? sb.unallocated - unsold : unsold - sb.unallocated;
+  // the supply identity, exact (Model 4 §10)
+  const whole = sb.unallocated + sb.openRoom + sb.roomAfter32 + sb.placedOpen + sb.unstreamed + sb.owed + sb.minted + sb.held + sb.committed;
   const inv = [
     registryBal === registryHeld && deedsBal === deedsHeld,
     marketBal === marketHeld && bankBal === bankHeld,
@@ -305,18 +310,18 @@ export async function census(requests: number[], done: Set<number>, ledger: Ledg
     ok3 && Number(nextToken) - 1 === tokens,
     supply === mp + mg + mr,
     ledger.inflow() === ledger.outflow() + registryBal + deedsBal + marketBal + bankBal + poolBal,
-    parts7 === maxSupply && dust < 10n ** 12n,
+    whole === maxSupply && sb.minted === supply,
   ];
   const counts = {} as Record<Stage, number>;
   for (const r of rows) counts[r.stage] = (counts[r.stage] ?? 0) + 1;
   let marketCap = 0n, sold = 0, soldProjected = 0n, tr3Accruing = 0n;
   for (const r of rows) tr3Accruing += r.accruing ?? 0n;
   for (const r of rows) if (standingSale(r)) { marketCap += r.price!; sold++; soldProjected += r.projected ?? 0n; }
-  // editionInfo: (edition, F, land-years placed in it, its size, opened at, closes by)
-  const used: bigint = open ? BigInt(open.placed) : 0n, capacity: bigint = open ? BigInt(open.capacity) : 0n;
+  const capacity: bigint = open ? BigInt(open.capacity) : 0n;
   return {
-    t, block, rows, edition: Number(cur), landYears: placed, tr3Supply: supply, gtas: gtas.length, capacity, relics: sb.relics,
-    registryBal, marketBal, bankBal, poolBal, registryHeld, marketHeld, bankHeld, poolHeld, deedsBal, deedsHeld, reserve: sb.relics, inv, counts, bad,
-    marketCap, sold, soldProjected, tillNextEdition: capacity > used ? capacity - used : 0n, tr3Accruing, tr3Owed: sb.owed,
+    t, block, rows, edition: Number(cur), placed, tr3Supply: supply, gtas: gtas.length, capacity, held: sb.held, committed: sb.committed,
+    waiting: (waiting as readonly bigint[]).length,
+    registryBal, marketBal, bankBal, poolBal, registryHeld, marketHeld, bankHeld, poolHeld, deedsBal, deedsHeld, inv, counts, bad,
+    marketCap, sold, soldProjected, tillNextEdition: open ? BigInt(open.room) : 0n, tr3Accruing, tr3Owed: sb.owed,
   };
 }

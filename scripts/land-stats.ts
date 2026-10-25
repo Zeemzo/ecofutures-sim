@@ -10,11 +10,11 @@ const rd = (k: any, fn: string, args: any[] = []) => bulk.readContract({ address
 const n = Number(await rd("registry", "nextRequestId"));
 const by: Record<number, { ha: number[]; perHaYr: number[]; price: number[] }> = {};
 const reqs: any[] = [];
-for (let i = 1; i < n; i++) { const r = await rd("registry", "getRequest", [BigInt(i)]); reqs[i] = r; (by[Number(r.country)] ??= { ha: [], perHaYr: [], price: [] }).ha.push(Number(r.landUnits) / 100); }
+for (let i = 1; i < n; i++) { const r = await rd("registry", "getRequest", [BigInt(i)]); reqs[i] = r; (by[Number(r.country)] ??= { ha: [], perHaYr: [], price: [] }).ha.push(Number(r.landUnits) / 10_000); }
 const logs = await bulk.getLogs({ address: (addr as any).market, event: parseAbiItem("event SaleCompleted(uint256 indexed tokenId, address indexed buyer, uint256 price, bool active)"), fromBlock: 0n, toBlock: "latest" });
 for (const l of logs) {
   const c = await rd("core", "getCovenant", [l.args.tokenId]); const r = reqs[Number(c.requestId)];
-  const ha = Number(r.landUnits) / 100, price = Number(l.args.price) / 1e18;
+  const ha = Number(r.landUnits) / 10_000, price = Number(l.args.price) / 1e18;
   by[Number(r.country)].price.push(price); by[Number(r.country)].perHaYr.push(price / ha / Number(r.termYears));
 }
 const q = (a: number[], p: number) => { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };

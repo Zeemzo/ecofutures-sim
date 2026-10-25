@@ -68,7 +68,7 @@ const S = {
   openRid: 0,
   seen: new Set<number>(),
   effective: [] as { real: number; chain: number }[],
-  /** The land-years all 21 editions hold. */
+  /** The TR3 all 32 editions give to land: 320,000,000. */
   fullAt: 0n,
   ended: false,
   /** The empty chain, before any deployment: every run starts from here. */
@@ -186,7 +186,7 @@ async function setupProgramme({ scenario, seed }: Choice) {
     S.chainAt = b.timestamp;
     S.engine.begin(b.timestamp);
     S.nextSample = b.timestamp;
-    S.fullAt = await read<bigint>("editions", "programmeCapacity");
+    S.fullAt = await read<bigint>("tree", "MAX_SUPPLY");
     const changed = TIMINGS.filter((k) => scenario.contracts[k] !== PRODUCTION[k]).length
       + scenario.countries.filter((c) => c.listingDays !== LISTING_DAYS).length;
     $("sScale").textContent = `${scenario.name} · ${changed ? `${changed} setting${changed === 1 ? "" : "s"} changed from production` : "production settings"}`;
@@ -327,7 +327,7 @@ async function runCensus(force: boolean) {
   S.invChecks++;
   c.inv.forEach((ok, i) => { if (!ok) S.invFails[i]++; });
   if (c.edition > prevEdition) {
-    pushEntry({ t: c.t, rid: 0, cat: "alert", text: `${c.edition > LAST_EDITION ? `Edition ${LAST_EDITION} closes: the programme is complete, and no more land is placed.` : `Edition ${c.edition} begins. Land placed from now earns TR3 at its rate, 10,000,000 over ${(capacityHa(c)).toLocaleString("en-US")} ha-yr, and the largest plot grows.`}`, seq: S.seq++ });
+    pushEntry({ t: c.t, rid: 0, cat: "alert", text: `Edition ${c.edition} opens: land placed in it from now earns its rate, 10,000,000 TR3 over ${(capacityHa(c)).toLocaleString("en-US")} ha-yr, and its title limit is larger.`, seq: S.seq++ });
   }
   if (S.engine.finished && !S.ended) programmeOver();
   while (force || c.t >= S.nextSample) {
@@ -352,13 +352,13 @@ function sample(c: Census): Sample {
     ],
     tr3: toUnits(c.tr3Supply),
     edition: c.edition,
-    market: [toUnits(c.marketCap), mintPrice(c), Number(c.tillNextEdition) / 100],
+    market: [toUnits(c.marketCap), mintPrice(c), toUnits(c.tillNextEdition)],
   };
 }
 
 /** The platform's TR3 mint price: the market cap over the TR3 the sold lands will mint across their terms. */
-/** The open edition's size in hectare-years. */
-const capacityHa = (c: Census) => Math.round(Number(c.capacity) / 100);
+/** The open edition's size in hectare-years (its capacity is in square-metre-years). */
+const capacityHa = (c: Census) => Math.round(Number(c.capacity) / 10_000);
 
 function mintPrice(c: Census): number {
   const tr3 = toUnits(c.soldProjected);
@@ -417,11 +417,12 @@ function renderStrip() {
   const fails = S.invFails.reduce((a, b) => a + b, 0);
   $("sInvariants").innerHTML = `${S.invFails.map((f, i) => `<i class="${f ? "fail" : ""}" title="${esc(INVARIANTS[i])}${f ? `: failed ${f} times` : ""}"></i>`).join("")} <span>${fails ? `${fails} invariant failures` : `${INVARIANTS.length} of ${INVARIANTS.length} invariants held`} · ${S.invChecks.toLocaleString("en-US")} checks</span>`;
   if (S.census && S.fullAt > 0n) {
-    const pct = Math.min(100, Number((S.census.landYears * 10000n) / S.fullAt) / 100);
+    const pct = Math.min(100, Number((S.census.placed * 10000n) / S.fullAt) / 100);
     $("sLandBar").style.width = `${pct}%`;
+    const waiting = S.census.waiting ? ` · ${S.census.waiting.toLocaleString("en-US")} land${S.census.waiting === 1 ? "" : "s"} waiting for a place` : "";
     $("sLandText").textContent = S.engine.landFull
-      ? `Programme closed · all ${LAST_EDITION} editions`
-      : `${pct < 0.1 && pct > 0 ? "<0.1" : pct.toFixed(1)}% of the ${LAST_EDITION} editions' land placed · edition ${Math.min(S.census.edition, LAST_EDITION)} of ${LAST_EDITION}`;
+      ? `Edition ${LAST_EDITION} is full · all 320,000,000 TR3 placed${waiting}`
+      : `${pct < 0.1 && pct > 0 ? "<0.1" : pct.toFixed(1)}% of the ${LAST_EDITION} editions' TR3 placed · edition ${Math.min(S.census.edition, LAST_EDITION)} of ${LAST_EDITION}${waiting}`;
   }
   const n = S.engine.anomalies.length;
   const a = $("sAnomalies");
@@ -446,8 +447,8 @@ function renderTicker() {
     item("EFTs sold", c.sold.toLocaleString("en-US"), "EFTs sold and still standing"),
     item("TR3 minted", money(c.tr3Supply, 2), "TR3 supply"),
     item("TR3 streaming", money(c.tr3Accruing, 2), "TR3 the covenants have streamed since their last settlement, at the EcoScore in force, up to what each one's last verification underwrote: claimable now, and minted when claimed. A late verifier's days wait at the horizon and are released by its verification, never forfeited"),
-    item("Till next edition", `${hectareYears(c.tillNextEdition)} ha-yr`, "Hectare-years of land still to place before the open edition fills: no edition closes on time"),
-    item("TR3 in Relics", money(c.relics, 2), "Everything land did not earn -- the score's shortfall, what an early end left, an edition's room never sold, a land's TR3 above 1,000,000 -- shared among every Relic by its points. Nothing is ever burned: awake Relics spend it on land still streaming"),
+    item("Till next edition", `${money(c.tillNextEdition, 0)} TR3`, "The open edition's room: TR3 still to give to land in turn before it fills. No edition closes on time"),
+    item("TR3 in records and gems", money(c.held, 2), "What land did not earn -- each land's shortfall and every shattered record -- shared at once among the records by weight, and paid as gem pairs every 3 years, capped at each land's own mint (the rest goes back to room). Gems are stones of TR3 in carats: fused, or set into new land as an overcharge. Nothing is ever burned"),
   ].join("");
 }
 
@@ -463,7 +464,7 @@ function renderKpis() {
     [money(c.registryBal + c.deedsBal + c.bankBal + c.poolBal), "USDT held by the protocol now"],
     [`${((k.active ?? 0) + (k.blocked ?? 0) + (k.ending ?? 0)).toLocaleString("en-US")}`, "covenants in their term"],
     [money(c.tr3Accruing), "TR3 streamed and not yet settled: claimable now"],
-    [`${Math.min(c.edition, LAST_EDITION)}`, `edition · ${hectareYears(c.landYears)} hectare-years placed`],
+    [`${Math.min(c.edition, LAST_EDITION)}`, `edition · ${money(c.placed, 0)} TR3 given to land`],
   ];
   $("kpis").innerHTML = items.map(([b, s]) => `<div class="kpi"><b>${b}</b><span>${s}</span></div>`).join("");
 }
@@ -741,7 +742,7 @@ async function renderDrawer(rid: number, force: boolean) {
   const fact = (k: string, v: string) => `<div><dt>${k}</dt><dd>${v}</dd></div>`;
   const facts = [
     fact("Land", hectares(row.land)), fact("Stated period", `${row.term} years`),
-    fact("EcoScore", row.score ? String(row.score) : "not yet"), fact("Edition", row.edition ? String(row.edition) : placed ? `${placed}, reserved (provisional until the auction ends)` : "not placed"),
+    fact("EcoScore", row.score ? String(row.score) : "not yet"), fact("Edition", row.edition ? String(row.edition) : placed ? `${placed}: placed, its allocation fixed` : "not yet placed: waiting for its turn"),
     fact("Guardian", esc(nameOf(row.guardian))), fact("Verifier", esc(nameOf(row.verifier))),
     fact("Owner of the EFT", row.owner ? esc(nameOf(row.owner)) : "not minted"),
     fact("Sale price", row.price ? `${money(row.price)} USDT` : "not sold"),
@@ -751,7 +752,8 @@ async function renderDrawer(rid: number, force: boolean) {
   if (reward && reward.allocation > 0n && !reward.ended) facts.push(fact("TR3 streaming", `${money(reward.pending)} TR3 streamed since the last settlement, claimable now${reward.horizon ? `; the stream runs to ${dateOf(Number(reward.horizon))}, what the last verification underwrote` : ""}`));
   if (row.termStart) facts.push(fact("Term", `${dateOf(row.termStart)} to ${dateOf(row.termEnd!)}`));
   if (reward && reward.held) facts.push(fact("TR3", "stopped by a block or an upheld 3B: what accrues is held until it lifts"));
-  if (reward && reward.boosts > 0n) facts.push(fact("Overcharged", `${reward.boosts} Relic${reward.boosts === 1n ? "" : "s"}: ${money(reward.boostCommitted)} TR3 committed, ${money(reward.boostPaid)} paid, ${money(reward.boostLeft)} still to stream`));
+  if (mk && mk.stones > 0n) facts.push(fact("Overcharged", `${mk.stones} stone${mk.stones === 1n ? "" : "s"} set: ${money(reward?.overchargePaid ?? 0n)} TR3 of theirs released so far`));
+  if (mk && mk.recordWeight + mk.recordBalance > 0n) facts.push(fact("Record", `weight ${money(mk.recordWeight, 0)}, ${money(mk.recordBalance)} TR3 collected · gem pairs made: ${mk.releases}`));
   let progress = "";
   if (row.total) {
     const pct = Math.round(((row.released ?? 0) / row.total) * 100);
@@ -817,9 +819,6 @@ function renderInvariants() {
     Paid in ${money(S.ledger.inflow(), 2)} = paid out ${money(S.ledger.outflow(), 2)} + held ${money(c.registryBal + c.deedsBal + c.marketBal + c.bankBal + c.poolBal, 2)}.</p>`;
 }
 
-function hectareYears(landYears: bigint): string {
-  return (Number(landYears) / 100).toLocaleString("en-US", { maximumFractionDigits: 0 });
-}
 
 /** Arrivals have stopped and every covenant has run out: the end of the programme. */
 function programmeOver() {
@@ -839,10 +838,10 @@ function programmeOver() {
     <dl class="summary">
       ${item("Requests", rows.length.toLocaleString("en-US"))}${item("Terms completed", completed.toLocaleString("en-US"))}
       ${item("Ended early", (rows.length - completed).toLocaleString("en-US"))}${item("Land under covenant", hectares(land))}
-      ${item("Hectare-years", hectareYears(c.landYears))}${item("Paid to guardians", `${money(m[9] + m[4] + m[14])} USDT`)}
+      ${item("TR3 given to land", money(c.placed, 0))}${item("Paid to guardians", `${money(m[9] + m[4] + m[14])} USDT`)}
       ${item("Paid to verifiers", `${money(m[1] + m[6])} USDT`)}${item("TR3 minted", money(c.tr3Supply))}
       ${item("Sales", `${money(m[5])} USDT`)}${item("Resales", `${money(m[17])} USDT`)}
-      ${item("Transactions", e.actions.toLocaleString("en-US"))}${item("Edition reached", c.edition > LAST_EDITION ? `all ${LAST_EDITION} closed` : `${c.edition} of ${LAST_EDITION}`)}
+      ${item("Transactions", e.actions.toLocaleString("en-US"))}${item("Edition reached", `${c.edition} of ${LAST_EDITION}`)}
     </dl></section>`;
   document.querySelector(".left")!.insertAdjacentHTML("afterbegin", html);
   pushEntry({ t: c.t, rid: 0, cat: "alert", text: "The programme is over: every covenant has run its course.", seq: S.seq++ });

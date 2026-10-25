@@ -3,9 +3,10 @@
 //
 //   RPC=http://127.0.0.1:8545 NAME=live npx tsx scripts/audit.ts
 //
-// Sources, as each check names them: the Covenant Flow Map v25 (FM, by page), the TR3 Final Model v6 and the
-// Overcharge & Reserve addendum, the V12 decisions (D1-D15, contracts/docs/decisions/V12_Decisions.md), the build
-// notes (contracts/docs/build-notes/V12_Build_Notes.md), and the contract function that enforces the rule.
+// Sources, as each check names them: the Covenant Flow Map v29 (FM, by page), R's "TR3 -- Model 4" (25 Oct 2026, by
+// section: placing, records, gems, stones, the supply identity) and its note "Stones and sockets", the V12 decisions
+// (contracts/docs/decisions/V12_Decisions.md, D28 for Model 4), the build notes (contracts/docs/build-notes/
+// V12_Build_Notes.md), and the contract function that enforces the rule.
 //
 // Dropped from V11's audit, because V12 removed what they tested: tr3-settled, tr3-settled-mints and tr3-accounted
 // (Tree.settle and PlaceSettled are gone: a place is never settled, its stream is released at each verification and
@@ -98,6 +99,8 @@ console.log(`${events.length} protocol events, ${transfers.length} USDT transfer
 
 // failed transactions: every block's receipts
 type Failed = { block: number; t: number; from: string; to: string; fn: string; expected: boolean };
+/** releaseOvercharge calls, by transaction: their target (no event names it, Model 4 §7.5). */
+const releaseTx = new Map<string, bigint>();
 const failed: Failed[] = [];
 let txCount = 0;
 const lensCode = String((code as any).code.lens);
@@ -112,7 +115,15 @@ for (let from = 1n; from <= last; from += 250n) {
   txs.forEach(({ tx, t, block }, i) => {
     // EcoLens is in no directory: the app deploys it from its own creation code, which finds it here
     if (!tx.to && receipts[i].contractAddress && L(addr.lens) === Z && String(tx.input).startsWith(lensCode)) addr.lens = getAddress(receipts[i].contractAddress!);
-    if (receipts[i].status === "success") return;
+    if (receipts[i].status === "success") {
+      if (L(tx.to ?? "") === L(addr.overcharge ?? Z)) {
+        try {
+          const d = decodeFunctionData({ abi: abis.overcharge, data: tx.input });
+          if (d.functionName === "releaseOvercharge") releaseTx.set(tx.hash, BigInt((d.args as any)[0]));
+        } catch {}
+      }
+      return;
+    }
     let fn = tx.input.slice(0, 10);
     try { fn = decodeFunctionData({ abi: allAbi, data: tx.input }).functionName; } catch {}
     let target = keyOf.get(L(tx.to)) ?? tx.to;
@@ -200,16 +211,16 @@ const deadline = cfg.response + cfg.panel + cfg.redraw;
 const USD = B(await rd("bank", "usd"));
 const editionScale = B(await rd("editions", "editionScale"));
 const defaultV0 = B(await rd("countries", "defaultBaseFee"));
-const defaultW = B(await rd("countries", "defaultFieldRate")); // set once, at the initializer: 7/50 of V
 
 // EcoFees, in bigint: the same arithmetic the contracts use
 const WAD = 10n ** 18n;
 const isqrt = (x: bigint) => { if (x === 0n) return 0n; let z = (x + 1n) / 2n, y = x; while (z < y) { y = z; z = (x / z + z) / 2n; } return y; };
-const scaleFor = (u: bigint) => WAD + isqrt(((u * WAD) / 100n) * WAD);
+// land in square metres (Model 4 §2.8): 1 + sqrt(ha)
+const scaleFor = (u: bigint) => WAD + isqrt(((u * WAD) / 10_000n) * WAD);
 const reviewFeeOf = (u: bigint, d: bigint) => (d * (scaleFor(u) + WAD / 2n)) / WAD;
-const deskOf = (v: bigint) => (v * 4n) / 50n;
-// item 9: fee 1 = V x (1 + sqrt ha) + W x ha, W the country's field rate (the default when unset), never below Wmin
-const verificationFeeOf = (u: bigint, v: bigint, w: bigint) => (v * scaleFor(u)) / WAD + (w * u) / 100n;
+// one lever V (Model 4 §11): D = V / 10, and fee 1 = V x (1 + sqrt ha + ha / 30)
+const deskOf = (v: bigint) => v / 10n;
+const verificationFeeOf = (u: bigint, v: bigint) => (v * scaleFor(u)) / WAD + (v * u) / 300_000n;
 // floor(c) = max(J x c x T x 100, c x T x fee / 0.07) (TR3 Model B item 9), at the request's own fees as it paid them
 const floorOf = (years: number, twice: boolean, judgment: bigint, fee: bigint) => {
   const reviews = BigInt((twice ? 2 : 1) * (years === 0 ? 1 : years));
@@ -223,8 +234,8 @@ const trancheSplit = (tranche: bigint, vp: bigint, tax: bigint, fnd: bigint) => 
   const v = (gross * vp) / 1000n, f = (gross * fnd) / 1000n, h = (gross * (ap / 2n)) / 1000n;
   return { v, f, h, g: tranche - v - f - h };
 };
-// the TR3 model (R's 320M model, 22 Oct): 32 editions, edition k holding SCALE x F(min(k, 10)) x F(k) land-years and
-// 10,000,000 new TR3; when Edition 32 is full no land enters again
+// the TR3 model (Model 4): 32 editions, edition k holding SCALE x F(min(k, 10)) x F(k) square-metre-years and giving
+// 10,000,000 TR3 to the land placed in it, its room counted in TR3
 const fib = (n: number) => { let a = 0n, b = 1n; if (n === 0) return 0n; for (let i = 1; i < n; i++) [a, b] = [b, a + b]; return b; };
 const LAST_EDITION = 32, LAST_STEP = 32, MAX_EDITIONS = 32;
 const PER_EDITION = 10_000_000n * WAD;
@@ -232,8 +243,8 @@ const MAX_SUPPLY = BigInt(LAST_EDITION) * PER_EDITION;
 const MAX_BASE = 1_000_000n * WAD;
 const stepOf = (n: number) => (n < LAST_STEP ? n : LAST_STEP);
 const capOf = (n: number) => { const k = stepOf(n); return editionScale * fib(Math.min(k, 10)) * fib(k); };
-// a title takes at most 100 x F(k) hectare-years in edition n: 10,000 x F(k) land-years
-const limitOf = (n: number) => 10_000n * fib(stepOf(n));
+// a title takes at most 100 x F(k) hectare-years in edition n: 1,000,000 x F(k) square-metre-years
+const limitOf = (n: number) => 1_000_000n * fib(stepOf(n));
 
 // =====================================================================================
 // The checks, in the order they are reported. Each names the rule and its source.
@@ -261,29 +272,30 @@ const evTr = check("events-match-transfers", "Money", "In every transaction, wha
 // TR3
 const trSplit = check("tr3-split", "TR3", "Of everything a covenant has released: the patron's 90% and the landowner's 10% (a referrer taking 30% of it) are what has been claimed plus what is claimable; and the claim events add up to what Tree says was paid", "Tree._due; GUARDIAN_PERCENT, REFERRAL_PERCENT_OF_GUARDIAN");
 const trRef = check("tr3-referrer", "TR3", "A referrer who is a GTA, or the land's own verifier, when the claim is made takes nothing; its share stays with the landowner. Anyone else is paid", "Tree._referrerEligible (R, 18 Oct, R4: anyone except a Council member or whoever scores that land)");
-const trCap = check("tr3-cap", "TR3", "No allocation is above 1,000,000 TR3, no land's TR3 with every commitment made to it above 1,000,000, and no covenant's land TR3 (released less overcharges) above its allocation", "EcoEditions.MAX_BASE_TR3, sell; Tree.LAND_CAP, commitBoost");
+const trCap = check("tr3-cap", "TR3", "No allocation is above 1,000,000 TR3, no land's allocation with every stone committed to it above 1,000,000, and no covenant's land TR3 (released less its stones') above its allocation", "Model 4 §2.6, §7.2; EcoEditions._place; EcoOvercharge.LAND_CAP, _commitment");
 const rsClaim = check("resale-claims", "Resale", "The patron's TR3 is minted only by a patron claim, to the EFT's owner at that moment, never in a transfer; a guardian claim mints the patron nothing", "R, 14 Oct, Part 1 items 1-3; Tree.claimPatron, claimGuardian");
 const rsOrd = check("resale-orders", "Resale", "Every resale takes a live order at its price: a listing or an offer made at the EFT's order counter in force, an offer before its expiry", "R, 14 Oct, Part 1 items 4 and 6; EcoFuturesToken.buy, acceptOffer");
 const trSup = check("tr3-supply", "TR3", "TR3's supply = everything the claim events minted = minted to patrons + guardians + referrers", "Tree");
-const plc = check("edition-placement", "Editions", "A sign-up holds no room; its land fits the open edition's limit (100 x F(k) ha-yr). It is queued when its verification is filed, and placed only after that watchdog has closed, whole, in the OPEN edition, in placing order; a land that does not fit the room left sends the edition to SETTLING and goes into the next", "TR3 Model B item 10 (FINAL); EcoEditions.reserve, queue, _placeDue, _place");
-const cls = check("edition-close", "Editions", "Editions open one at a time, at the step min(n, 32), each with 10,000,000 new TR3: the next as the OPEN one settles (filled, or a land overflowing it); when Edition 32 settles, none -- no land enters again. No edition closes on time: a SETTLING edition closes once every place in it has activated (all sold or released), the TR3 of its room never sold dropping to the Relics", "R's 320M model; TR3 Model B item 10; EcoEditions._settle, _open, _checkFinal, _close");
-const edState = check("edition-state", "Editions", "The editions replayed from the events end where EcoEditions is now: each edition's placed and sold land-years, its state and when it opened, the OPEN edition, and every request's place", "EcoEditions.editionOf, current, reservationOf");
-const plRel = check("place-released", "Editions", "A place is released exactly when its request ends without a sale (cancelled, rejected, failed, refused, lapsed, unsold...): its room returns to its edition while it has not closed; a sold land is never released", "R, 13 Oct, section 3.6; EcoEditions.release; EcoRegistry._finish");
-const e4 = check("free-room-to-relics", "Editions", "The TR3 of room an edition never sold, at its final close, drops to the Relics in the same transaction, as does a land's allocation above 1,000,000 at its sale", "R's 320M model; EcoEditions._returnRoom; Tree.dropRoom, assignEdition");
-const qMove = check("queue-promotion", "Editions", "Free room in a SETTLING edition goes to the earliest-placed unlisted land in a later edition that fits it: every move is up, of an unlisted, unsold place, into an edition opened and not closed whose room and limit it fits, with no unlisted land placed before it in any later edition that fits", "TR3 Model B item 10 (FINAL); EcoEditions.promote");
-const qFix = check("edition-fixed", "Editions", "A place is fixed when its EFT is first listed, never unfixed, and a fixed place never moves; a land with no place cannot be listed", "TR3 Model B item 10 (FINAL); EcoEditions.fix, _place; EcoMarket.listForAuction");
-const asg = check("edition-assignment", "Editions", "Each covenant activates in the edition its place is in, sold there with its land-years at that edition's rate (capped at 1,000,000: the excess drops to the Relics)", "R's 320M model; EcoEditions.sell, _sold; Tree.assignEdition");
+const plc = check("placement-in-turn", "Editions", "A sign-up reserves nothing; the first verification sets the land's turn for good, the later of 81 days after its sign-up and its watchdog's close. Lands are placed only once their turn has come, in turn (the earlier turn, then the lower request id), the passed-over lands an open or earlier edition now takes first: each in the OPEN edition, within its title limit, its allocation N = H x r_k fixed then -- straddling once into the next edition when it needs more than the room left -- or, over the title limit, passed over to the first edition that takes it; after Edition 32, only into returned room", "Model 4 §3.1-3.5, §3.9; EcoEditions.queue, _placeDue, _place");
+const cls = check("edition-open", "Editions", "Editions open one at a time, each with 10,000,000 TR3 of room: the next exactly when the OPEN one's room runs out (filled, or straddled); Edition 32 filling makes the ladder full. No edition closes on time", "Model 4 §2, §3.3; EcoEditions._filled, _open");
+const edState = check("edition-state", "Editions", "The editions replayed from the events end where EcoEditions is now: each edition's room and TR3 placed, when it opened, the OPEN edition, whether the ladder is full, every request's place and allocation, and the TR3 placed and not yet active", "EcoEditions.rawEdition, current, full, reservationOf, placedOpen");
+const plRel = check("place-released", "Editions", "A place is released exactly when its request ends before its activation: its allocation goes at once to the open edition's room; a land released while it waits is never placed; a sold land is never released", "Model 4 §3.7; EcoEditions.release; EcoRegistry._finish");
+const e4 = check("room-returned", "Editions", "Exactly five things return TR3 to room, each to the OPEN edition (Edition 32's after the ladder is full) in the transaction that frees it: a released place, an early end's or an acquired part's unstreamed allocation, TR3 blocked at an End-Date hold not lifted, a drop with no weight anywhere, and a gem pair's excess over its land's mint", "Model 4 §3.8; EcoEditions.returnRoom, _toRoom");
+const asg = check("edition-assignment", "Editions", "Each covenant activates in the edition it was placed in, with the allocation fixed at its placement", "Model 4 §3.2; EcoEditions.sell; Tree.assignEdition");
 const qAssign = check("verifier-assigned", "Requests", "A request no verifier claimed is assigned by an active Holder of its country, to one of its own verifiers, only after 30 days unclaimed (and any first claim over); by the Council only after 60; no request is ever ended for want of a verifier", "R, 13 Oct, section 4.1-4.3; EcoParties.assignVerifier, reassignVerifier")
 const qReject = check("rejection", "Requests", "A rejection is filed by the claiming verifier inside its claim, with a reason (land not found, no valid title, no access given) and evidence; it ends the request only after the watchdog has closed with no challenge open, the verification fee to the verifier and the rest refunded; an upheld 1A reopens it", "R, 13 Oct, section 4.4; EcoParties.rejectRequest; EcoRegistry.cancelRequest")
-const rew = check("tr3-reward", "TR3", "Each covenant's stream starts with its sale's allocation (TR3 at a score of 100), at the covenant's score, which is also its entry score", "Tree.startReward; R's 320M model");
-const relScore = check("tr3-release-score", "TR3", "TR3 streams forward (C9): outside a verification it settles at the score in force, never past the horizon the last verification underwrote and never while stopped; a verification settles what it underwrote at the old score, then the rest -- late days, or what a stop held -- at the score it records; the score's shortfall goes to the Reserve: released = floor((released + credited) x score / 100)", "R, 18-19 Oct, C9; Tree._settle, _sync, pass; addendum (ECOSCORE source); FM p16 (3B back-paid at the corrected score)");
-const hzn = check("tr3-horizon", "TR3", "Each verification underwrites the interval after it: the stream may run to the earlier of one interval after it and the next scheduled due date (the term's end after the last); at the activation, one interval after the verification before the sale, never past the first due date.", "R, 18-19 Oct, C9; Relic rules E5; Tree.startReward, pass, _nextHorizon");
-const strCons = check("tr3-stream-conservation", "TR3", "Every allocation is accounted exactly: what was released + what dropped to the Relics (score shortfall, late days, holds, an early end, an acquired part) = the allocation once the stream ends, and never more before", "Tree._settle, _end, endPart");
-const late = check("late-verification", "TR3", `A re-verification is late only past its due date + the grace (${days(cfg.maxDelay)}): it records when it fell overdue, and nothing of its TR3 is forfeited -- only the score's shortfall drops to the Relics (R, 18 Oct, C9)`, "D3; Core.verify; Tree._settle");
-const brk = check("tr3-supply-breakdown", "TR3", "Every TR3 of the 320,000,000 is minted, owed, held by the Relics, committed to an overcharge, streaming or not yet sold: each part as the events give it, and the unallocated remainder within rounding dust of the room not yet sold. Nothing is burned", "R's 320M model; Tree.supplyBreakdown; EcoEditions.unallocatedTR3; EcoOvercharge.pool");
-const ovc = check("overcharge", "TR3", "A Relic is born at its covenant's activation and charges; each settled span gives it points -- the land's TR3 released, plus span x (score - entry) / 100 above its entry score -- and every drop is shared among all Relics by points, rounded down per Relic, the rest waiting (a mirror of the accumulator, to the wei). It wakes at a completed End Date, minted to the EFT's owner, or shatters on an early end or a breach, Deed or partition hold standing then (its balance shared out, its points lapsed); an acquired part shatters that share. An awake Relic commits from its balance the least of its balance, M x the land's allocation not yet streamed (M = max(1, sqrt(reward at its edition / reward at the land's))) and 1,000,000 less the land's allocation and every commitment made to it; at most 8 a land, never to a stopped stream. Each span pays span x q of every commitment (q = commit / allocation not yet streamed), at the land's score, and carries the rest back to the Relic; the stream's end, or an acquired part, carries back what is unpaid. Forging two awake Relics of one edition (2 or later) keeps the first, an edition lower, with both Relics' points and balances", "R's 320M model (22 Oct); EcoOvercharge; Tree._settle, _payBoosts, _carryBack, commitBoost, boostRoom");
-const land = check("land-at-request", "Editions", "Every request's land is at least 100 m2, and its land-years within the limit of the edition open at its sign-up (or, in a gap, the next)", "TR3 Model B item 10; EcoEditions.reserve");
-const term = check("term-at-request", "Editions", "Every request's term is within its country's range and 3-100 years", "EcoCountries.requestTerms; EcoEditions.reserve");
+const rew = check("tr3-reward", "TR3", "Each covenant's stream starts with the allocation fixed at its placement, at the covenant's score", "Model 4 §3.2, §4.1; Tree.startReward");
+const relScore = check("tr3-release-score", "TR3", "TR3 streams forward (C9): outside a verification it settles at the score in force, never past the horizon the last verification underwrote and never while stopped; a verification settles what it underwrote at the old score, then the rest -- late days -- at the score it records; what a stop held is released at the lower of the score that opened its interval and the one named now; the shortfall drops to the records: released = floor(span x score / 100)", "R, 18-19 Oct, C9; Model 4 §4.2, §4.9; Tree._settle, _sync, pass");
+const hzn = check("tr3-horizon", "TR3", "Each verification underwrites the interval after it: the stream may run to the earlier of one interval after it and the next scheduled due date (the term's end after the last); at the activation, one interval after the verification before the sale, never past the first due date.", "R, 18-19 Oct, C9; Tree.startReward, pass, _nextHorizon");
+const strCons = check("tr3-stream-conservation", "TR3", "Every allocation is accounted exactly: what the land released + its shortfall dropped to the records + what went back to room (an early end, an End-Date hold not lifted, an acquired part) = the allocation once the stream ends, and never more before", "Model 4 §4; Tree._settle, _end, endPart");
+const late = check("late-verification", "TR3", `A re-verification is late only past its due date + the grace (${days(cfg.maxDelay)}): it records when it fell overdue, and nothing of its TR3 is forfeited -- only the score's shortfall drops (R, 18 Oct, C9)`, "D3; Core.verify; Tree._settle");
+const brk = check("tr3-supply-identity", "TR3", "Every TR3 of the 320,000,000, at every block: in an edition not yet open, room, placed and not yet active, unstreamed, owed, minted, held by the records and gems, or committed to an overcharge -- each part as the events give it, summing exactly. Nothing is burned", "Model 4 §10; EcoLens.supply");
+const recC = check("records", "Records", "One record per land from its activation (a mirror of EcoOvercharge, to the wei): its weight m x j (m = A' x S / (100 T), j = min(releases + 1, n), n = T / 3), set at activation and at every Loop Anchor from the score just named, 0 under a breach, Deed or partition hold, after a pause (only once the verification is overdue) and after the last interval; every drop -- a land's shortfall, a shattered record -- shared at once by one index over the total weight, or back to room when no record weighs", "Model 4 §5, §6.1-6.3; EcoOvercharge.born, settle, anchor, hold, lift, pause, _drop");
+const pairC = check("gem-pairs", "Records", "A pair at the Loop Anchor completing each 3 years (releases due together are one pair), the last at the End Date: x = min(the record's balance, what its land minted since its last pair), the Patron's x - floor(x / 2) to the EFT's owner and the Guardian's floor(x / 2) to the payee of record, the rest back to room; an early end or an End-Date hold not lifted shatters the record instead, its balance dropping to the others, and an acquired part shatters that share", "Model 4 §6.4-6.7; EcoOvercharge._pair, end, cut");
+const gemC = check("gems", "Gems", "Every gem's edition, half, land and carats replay to what EcoOvercharge holds now: minted at a pair, its carats moved only by setting it into land, what comes back to it, and fusing -- two or more of one edition, the caller's, none with an open commitment, into the first, never above 1,000,000 carats", "Model 4 §6.8, §8; EcoOvercharge._mintGem, transmute, _back");
+const stoneC = check("stones", "Stones", "Stones are set only into a new land (activated, in its first interval, under no hold) by its EFT's owner, at most 21, earliest edition first: each commits C = min(its carats, floor(M x room left), 1,000,000 - the allocation - every commitment), M = max(1, sqrt(r_stone / r_land)), using ceil(C / M) of the room (the allocation); what they commit is minted with the land's stream at its score or comes back to the stones -- never more -- and it all has, once the land's TR3 ends or the overcharge is released", "Model 4 §7; Stones and sockets; EcoOvercharge.setStones, accrue, _confirm, _returnStones, releaseOvercharge");
+const land = check("land-at-request", "Editions", "Every request's land is at least 100 m2, and its square-metre-years within Edition 32's title limit (100 x F(32) ha-years)", "Model 4 §2.5, §2.8; EcoEditions.reserve");
+const term = check("term-at-request", "Editions", "Every request's term is within its country's range and one of 3, 6 ... 99 years", "Model 4 §2.8; EcoCountries.requestTerms; EcoEditions.reserve");
 // Timing and the term
 const wd = check("watchdog", "Challenges", `A watchdog challenge (W1A, W1B) is raised against the request's current verification, within the watchdog window after it (${days(cfg.watchdog)})`, "FM p15; EcoRegistry.challengeTarget");
 const setOffC = check("set-off", "Money", "An enforcement cost is filed by the covenant's Holder only while it is held for a breach, never above the landowner's share of what is still held; a cure at least 14 days after the filing confirms it, any other end voids it", "FM v29 P7; decisions of 17 Oct; TR3 Model B item 9; EcoParties.fileEnforcementCost; EcoBank.fileSetOff, _resolveSetOff");
@@ -310,7 +322,7 @@ const firstClaim = check("first-claim", "Requests", "A request reopened by W1A i
 const paper = check("deeds-clocks", "Paper", "Before the sale each document is recorded, and attested, inside its clock (anchoring, attestation: from when the step became current, with the extensions granted, silence counting as granted after the decision window); a request lapses only after its clock; the landowner anchors only from its day", "FM p12-13; D8; EcoDeeds._deadline, recordDocument, attest, lapse");
 const gtaA = check("gta-attest-from", "Paper", `Every attester is independent: a verifier of the country from another organisation than the land's verifier, a Trust Admin of the country other than the land's, or a GTA -- a document from ${days(cfg.gtaFrom)} after it was recorded, a review window from seven tenths of it`, "FM p12, p17; EcoDeeds._requireAttester; EcoChallenge._eligibleAttester");
 // the configuration, enforced
-const fees = check("upfront-fees", "Configuration", "Each request's upfront is the fee model's for its land and its country's fees at the time: V x (1 + sqrt ha) + W x ha (W never below the Council's Wmin), V, D x (1.5 + sqrt ha); and fees 3-5: P only where the flow has a power, A only where it has an agreement to grant, C0 + C1 x ha", "FM p9; TR3 Model B items 9, 16; EcoCountries.quote");
+const fees = check("upfront-fees", "Configuration", "Each request's upfront is the fee model's for its land and its country's fees at the time, V never below the Council's Vmin: V x (1 + sqrt ha + ha / 30), V, (V / 10) x (1.5 + sqrt ha); and fees 3-5: P only where the flow has a power, A only where it has an agreement to grant, C0 + C1 x ha", "FM p9; Model 4 §11; TR3 Model B item 16; EcoCountries.quote");
 const floorC = check("price-floor", "Configuration", "No auction starts below the covenant's yearly floor at its request's own fees, max(J x T x 100, T x fee / 0.07)", "TR3 Model B item 9 (FINAL); EcoMarket.listForAuction; EcoEditions.floorOf; EcoFees.priceFloor");
 const termC = check("term-length", "Configuration", `Each term runs exactly its Stated Period: years x the protocol year (${days(cfg.year)})`, "Core.activate");
 const cad = check("instalment-schedule", "Configuration", "Each sale is paid twice a year exactly when its price reaches floor(2) at its request's fees, else yearly: interval = year / releases a year, years x that many instalments after the first, the first taking the division's remainder", "TR3 Model B item 9 (FINAL); EcoBank._openAccount");
@@ -318,22 +330,20 @@ const rev = check("review-window", "Configuration", `Every review window runs ex
 const halt = check("halt-threshold", "Configuration", `The unattested run counts each window that settles unattested and resets at an attestation; a window opens halted exactly when it reaches the threshold (${cfg.haltAfter})`, "FM p17; EcoChallenge.openWindow, _settle, attestVerification");
 const auc = check("auction-length", "Configuration", `No auction is shorter than the configured minimum (${days(cfg.minAuction)}), and each closes inside its listing window`, "EcoMarket.listForAuction");
 const acc = check("acceptance", "Configuration", `A verification is submitted by the claiming verifier within the acceptance window of its claim (${days(cfg.acceptance)})`, "EcoRegistry.submitVerification");
-const wdw = check("watchdog-wait", "Configuration", `A request enters its flow only after its watchdog window has passed (${days(cfg.watchdog)})`, "EcoRegistry.enterFlow");
+const wdw = check("watchdog-wait", "Configuration", `A request enters its paper flow only once its land is placed and its watchdog window has passed (${days(cfg.watchdog)}); a land placed more than a protocol year after its verification, only after its verifier has re-verified it`, "Model 4 §3.1; EcoRegistry.enterFlow, _context, _verifying");
 const lst = check("listing-window", "Configuration", "Each request takes its country's listing and post-sale windows at the request; it closes unsold only after the listing window", "FM p8; EcoRegistry.requestVerification, closeUnsold");
 const pst = check("post-sale-window", "Configuration", "A path B sale completes inside its post-sale window, and lapses only after it", "FM p5; EcoRegistry.lapseSale; EcoDeeds.attest");
 const flw = check("flow-order", "Configuration", "Every request walks its country's flow, step by step, in order", "EcoCountries flows; FlowCode");
 
 // ---- the chronological replay: the protocol's state at each event, and every check that needs it ----
-type Fees = { baseFee: bigint; deskRate: bigint; powerFee: bigint; agreementFee: bigint; registrationFixed: bigint; registrationPerHa: bigint; fieldRate: bigint };
+type Fees = { baseFee: bigint; powerFee: bigint; agreementFee: bigint; registrationFixed: bigint; registrationPerHa: bigint };
 type Settings = { flowId: number; min: number; max: number; listing: number; postSale: number };
 const countries = new Map<number, { settings: Settings; fees: Fees }>();
 const flows = new Map<number, number[]>();
 let defaultV = defaultV0;
-const vOf = (f: Fees) => (f.baseFee !== 0n ? f.baseFee : defaultV);
-const dOf = (f: Fees) => (f.deskRate !== 0n ? f.deskRate : deskOf(vOf(f)));
-/** Wmin: 2/50 of V at the initializer, then the Council's (SET_MIN_FIELD_RATE). */
-let minW = -1n;
-const wOf = (f: Fees) => { const w = f.fieldRate !== 0n ? f.fieldRate : defaultW; return w < minW ? minW : w; };
+/** Vmin: the default V at the initializer, then the Council's (SET_MIN_BASE_FEE); no V below it (Model 4 §11). */
+let minV = -1n;
+const vOf = (f: Fees) => { const v = f.baseFee !== 0n ? f.baseFee : defaultV; return v < minV ? minV : v; };
 let split = { wallet: Z, v: 0n, tax: 0n, f: 0n };
 const splitChanges: number[] = [];
 
@@ -392,19 +402,18 @@ const covs = new Map<bigint, Cov>();
 type Acct = { price: bigint; pool: bigint; balance: bigint; per: bigint; total: number; released: number; holds: number;
   shareToPatron: boolean; first: bigint; verifierPaid: bigint; splitAt: number; closedHeld: bigint; split0: typeof split };
 const accts = new Map<bigint, Acct>();
-/** A Relic's commitment to a land: what is left, its ratio to the allocation not yet streamed when it was made, and what
- *  it has paid and carried back. */
-type Boost = { relicId: bigint; left: bigint; q: bigint; commit: bigint; paid: bigint; carried: bigint };
-type Stream = { alloc: bigint; edition: number; score: number; entry: number; rescore: boolean; ended: boolean; stream: bigint; credits: bigint;
+/** A covenant's stream, replayed (Tree): its allocation (less acquired parts), what the land released, what it dropped
+ *  to the records, what went back to room at its end, and where it stands (C9). */
+type Stream = { alloc: bigint; edition: number; score: number; rescore: boolean; ended: boolean; stream: bigint; credits: bigint; toRoom: bigint;
   /** C9: where the stream stands (the last release's end), how far the last verification underwrote it, and whether it is
    *  stopped (a block or an upheld 3B). */
   mark: number; horizon: number; held: boolean;
-  /** The 320M model: the Relics' commitments to it, and every commitment made (within the 1M cap). */
-  boosts: Boost[]; boostCommitted: bigint;
-  /** What acquired parts cut from the allocation (Tree.endPart): the land cap counts the allocation after them. */
+  /** What acquired parts cut from the allocation (Tree.endPart), back to room. */
   cut: bigint;
-  /** Whether a breach, Deed or partition hold stood at the End Date: its Relic shatters. */
-  heldAtEnd: boolean };
+  /** Whether a breach, Deed or partition hold stood at the End Date. */
+  heldAtEnd: boolean;
+  /** The intervals Loop Anchors have confirmed, and what its stones have released. */
+  anchored: number; overcharge: bigint };
 const streams = new Map<bigint, Stream>();
 type Win = { openedAt: number; closesAt: number; attestor: string; index: number; through: number; forfeited: boolean; settled: boolean };
 type Pool = { pool: bigint; fee: bigint; funded: number; opened: number; win?: Win; runs: number; lastAttester: string; fundedAmount: bigint; paid: bigint; attPay?: bigint; attPayBefore?: bigint };
@@ -415,70 +424,176 @@ type Ch = { cid: bigint; option: number; subject: bigint; challenger: string; de
   verifier: string; guardian: string; holder: string; chHolder: string; country: number; panel: string[]; voters: Set<string>;
   firstPool?: bigint; before?: { status: number; blockReason: number; win?: Win; lastAttester: string } ; ended: boolean };
 const chs = new Map<bigint, Ch>();
-/** EcoOvercharge's ledger, replayed to the wei: each Relic, the points, the TR3 per point dropped, what waits unshared, and
- *  everything the Relics hold. */
-type RelicL = { edition: number; state: number; source: bigint; points: bigint; balance: bigint; accAt: bigint };
-const relicL = new Map<bigint, RelicL>(), relicOfTid = new Map<bigint, bigint>(), forgedInto = new Map<bigint, bigint>();
-let tPoints = 0n, accPP = 0n, unsharedEv = 0n, poolEv = 0n;
-const RS = { NONE: 0, CHARGING: 1, AWAKE: 2, SHATTERED: 3, FORGED: 4 };
-const relicUpd = (r: RelicL) => { r.balance += (r.points * (accPP - r.accAt)) / WAD; r.accAt = accPP; };
-const relicShare = (amount: bigint) => {
-  poolEv += amount;
-  if (tPoints === 0n) { unsharedEv += amount; return; }
-  amount += unsharedEv;
-  const inc = (amount * WAD) / tPoints;
-  accPP += inc;
-  const shared = (inc * tPoints + WAD - 1n) / WAD;
-  unsharedEv = amount > shared ? amount - shared : 0n;
-};
-/** Which of a land's commitments a BoostPaid or BoostCarried belongs to: Tree pays them in order, each its BoostPaid then
- *  its BoostCarried, and one Relic may hold several commitments to one land. */
-const boostIndex = (e: Ev, s: Stream) => {
-  const tx = byTx.get(e.tx)!, k = tx.indexOf(e), tid = B(e.a.tokenId), rid = B(e.a.relicId);
-  let prev: any;
-  for (let j = k - 1; j >= 0; j--) if (B(tx[j].a.tokenId ?? -1n) === tid) { prev = tx[j]; break; }
-  const inGroup = prev && (prev.name === "BoostPaid" || prev.name === "BoostCarried") && prev.boostIdx !== undefined;
-  if (e.name === "BoostCarried" && inGroup && prev.name === "BoostPaid" && s.boosts[prev.boostIdx].relicId === rid) return prev.boostIdx as number;
-  const start = inGroup ? (prev.boostIdx as number) + 1 : 0;
-  for (let i = start; i < s.boosts.length; i++) if (s.boosts[i].relicId === rid && s.boosts[i].left > 0n) return i;
-  return s.boosts.findIndex((b) => b.relicId === rid && b.left > 0n);
-};
-/** The Relic's balance when an overcharge took its commitment, by Relic, in the transaction being replayed. */
-const commitFrom = new Map<bigint, bigint>();
-const resolveRelic = (id: bigint) => { for (let i = 0; i < 64 && forgedInto.has(id); i++) id = forgedInto.get(id)!; return id; };
-// the editions, replayed (TR3 Model B items 10 and 15): each request's place, and each edition's placed and sold
-// land-years, its live places, its state and when it opened
-type Place = { rid: number; edition: number; ly: bigint; units: bigint; full: bigint; fixed: boolean; listed: boolean; sold: boolean; released: boolean;
-  seq: number; queuedAt: number; tokenId?: bigint;
-  late?: boolean };
+
+// ---- TR3 Model 4, replayed to the wei: the editions and the places (§3), the records (§5-6), the gems (§8) and the
+// stones set into land (§7) ----
+type Place = { rid: number; units: bigint; years: number; ly: bigint; signedAt: number; turn: number;
+  /** 0 not yet verified; 1 its turn is its watchdog's close; 2 its sign-up's day 81; 3 passed over, in a list */
+  stream: number;
+  edition: number; rest: number; alloc: bigint; placedAt: number; stale: boolean; sold: boolean; released: boolean };
 const places = new Map<number, Place>();
 const NE = MAX_EDITIONS + 2;
-const edR: bigint[] = Array(NE).fill(0n), edS: bigint[] = Array(NE).fill(0n), edLive: number[] = Array(NE).fill(0);
-const edOpened: number[] = Array(NE).fill(0), edClosed: boolean[] = Array(NE).fill(false), edSettling: boolean[] = Array(NE).fill(false);
-/** The OPEN edition (0 in a gap) and the last opened. */
-let ed = 0, edLast = 0, seqLast = 0, finishedEv = false;
-/** Places whose release closed their edition: the close is emitted before the release. */
-const releasedAtClose = new Set<number>();
-const fitsMove = (e: number, ly: bigint) => ly <= limitOf(e) && edR[e] + ly <= capOf(e);
-/** Whether an unlisted land placed before `seq`, in an edition after e, fits e's room. */
-const waitingFits = (seq: number, e: number) => [...places.values()].some((q) => q.edition > e && !q.fixed && !q.sold && !q.released && q.seq !== 0 && q.seq < seq && fitsMove(e, q.ly));
+/** Each edition's room (TR3 not yet given to land), the TR3 placed in it, and when it opened. */
+const edRoom: bigint[] = Array(NE).fill(0n), edPlaced: bigint[] = Array(NE).fill(0n), edOpened: number[] = Array(NE).fill(0);
+/** The OPEN edition, whether Edition 32 has filled, and the TR3 allocated to land placed and not yet active. */
+let ed = 0, ladderFull = false, placedOpenEv = 0n;
+/** Each edition's passed-over lands, first in, first out. */
+const lists = new Map<number, number[]>();
+const TURN_DELAY = 81 * DAY;
+const RS = { RELEASED: 0, EARLY_END: 1, END_HOLD: 2, NO_WEIGHT: 3, PAIR_CAP: 4 };
+const turnBefore = (x: Place, y: Place) => x.turn < y.turn || (x.turn === y.turn && x.rid < y.rid);
+/** The land whose turn is next (Model 4 §3.2-3.5): the passed-over lands an open or earlier edition now takes first,
+ *  earliest turn first (a land released while it waits drops out); then the earliest turn of every verified land not yet
+ *  placed whose turn has come, ties by request id; none after Edition 32 while no room is there. */
+const nextInTurn = (t: number, open = ed): Place | undefined => {
+  if (ladderFull && edRoom[LAST_EDITION] === 0n) return undefined;
+  let best: Place | undefined;
+  for (let e = 1; e <= open; e++) {
+    const l = lists.get(e);
+    while (l && l.length && places.get(l[0])!.released) l.shift();
+    if (l && l.length) { const p = places.get(l[0])!; if (!best || turnBefore(p, best)) best = p; }
+  }
+  if (best) return best;
+  for (const p of places.values()) if ((p.stream === 1 || p.stream === 2) && p.edition === 0 && !p.released && p.turn <= t && (!best || turnBefore(p, best))) best = p;
+  return best;
+};
+
+/** A land's record (EcoOvercharge.Record): its weight, its allocation A', its balance settled to `index`, and what its
+ *  land minted since its last pair. */
+type Rec = { edition: number; state: number; n: number; releases: number; term: number; weight: bigint; alloc: bigint; balance: bigint; minted: bigint; index: bigint;
+  /** an acquired part handled in this transaction, and the balance it shattered */
+  cutDone: string; cutAmount?: bigint };
+const recs = new Map<bigint, Rec>();
+const RSt = { NONE: 0, ASLEEP: 1, HELD: 2, PAUSED: 3, CLOSED: 4 };
+const INDEX = 10n ** 36n;
+/** The total weight, the drop index (TR3 per unit of weight x 10^36), all the records and gems hold (with the index's
+ *  dust), and the stones' TR3 committed to land and not yet minted or returned. */
+let totalW = 0n, dropIdx = 0n, poolEv = 0n, committedEv = 0n;
+const settleRec = (r: Rec) => { if (r.weight !== 0n) r.balance += (r.weight * (dropIdx - r.index)) / INDEX; r.index = dropIdx; };
+/** w = m x j: m = floor(A' x S / (100 T)), j = min(releases made + 1, n). */
+const weightOf = (r: Rec, score: number) => {
+  const m = (r.alloc * BigInt(score)) / (100n * BigInt(r.term));
+  const j = Math.min(r.releases + 1, r.n);
+  return m * BigInt(j);
+};
+/** The next of EcoOvercharge's events for this land after `e`, in its transaction. */
+const nextFor = (e: Ev, tid: bigint) => (byTx.get(e.tx) ?? []).find((x) => x.ord > e.ord && x.c === "overcharge" && x.a.land !== undefined && B(x.a.land) === tid)?.name;
+
+/** The gems (ERC-721): edition, half (1 Patron, 2 Guardian, 3 fused), release, land, carats, and the lands it is set in
+ *  with something unpaid. */
+type Gem = { edition: number; half: number; release: number; land: bigint; balance: bigint; open: number; burned?: boolean };
+const gemsL = new Map<bigint, Gem>(), gemOwner = new Map<bigint, string>();
+const CARAT_CAP = 1_000_000n * WAD;
+/** A land's sockets (EcoOvercharge.Land) and its stones. */
+type Stone = { set: boolean; unpaid: bigint; instalment: bigint };
+type LandS = { room: bigint; roomUsed: bigint; committed: bigint; allocation: bigint; instalment: bigint; left: bigint; carry: bigint;
+  from: number; to: number; mark: number; ids: bigint[]; st: Map<bigint, Stone> };
+const landsS = new Map<bigint, LandS>();
+const STOPS = Holds.BREACH | Holds.DEED | Holds.PARTITION | Holds.VACANCY;
+/** What each transaction's Carried events should be, by `tx|gem|amount`, and what they were. */
+const carriedWant = new Map<string, number>(), carriedEv = new Map<string, number>();
+const back = (tx: string, id: bigint, amount: bigint, s: Stone) => {
+  const g = gemsL.get(id);
+  if (amount !== 0n) {
+    if (g) g.balance += amount;
+    const k = `${tx}|${id}|${amount}`;
+    carriedWant.set(k, (carriedWant.get(k) ?? 0) + 1);
+  }
+  if (g && s.unpaid === 0n && s.instalment === 0n && g.open !== 0) g.open -= 1;
+};
+/** EcoOvercharge.accrue: the instalments of the interval running accrue with the land's stream to `to`, at its score. */
+const accrue = (tid: bigint, to: number, score: number) => {
+  const L_ = landsS.get(tid);
+  if (!L_ || L_.left === 0n) return 0n;
+  const t = Math.min(to, L_.to);
+  if (t <= L_.mark) return 0n;
+  const p = t === L_.to ? L_.left : (L_.left * BigInt(t - L_.mark)) / BigInt(L_.to - L_.mark);
+  L_.left -= p; L_.mark = t;
+  const minted = (p * BigInt(score)) / 100n;
+  L_.carry += p - minted;
+  committedEv -= minted;
+  return minted;
+};
+/** EcoOvercharge._confirm: the interval confirmed, what the score withheld returns to each stone. */
+const confirm = (tid: bigint, tx: string) => {
+  const L_ = landsS.get(tid);
+  if (!L_ || L_.instalment === 0n) return;
+  const inst = L_.instalment, carry = L_.carry, left = L_.left;
+  L_.instalment = 0n; L_.left = 0n; L_.carry = 0n;
+  let seen = 0n, gaveC = 0n, gaveL = 0n;
+  for (const id of L_.ids) {
+    const s = L_.st.get(id)!, si = s.instalment;
+    if (si === 0n) continue;
+    s.instalment = 0n; seen += si;
+    const c = seen === inst ? carry - gaveC : (carry * si) / inst, l = seen === inst ? left - gaveL : (left * si) / inst;
+    gaveC += c; gaveL += l;
+    s.unpaid += l;
+    back(tx, id, c, s);
+  }
+  committedEv -= carry; poolEv += carry;
+};
+/** EcoOvercharge._openInstalments: each stone's share of the interval [from, to) of the term still to run. */
+const openInstalments = (tid: bigint, from: number, to: number, termEnd: number) => {
+  const L_ = landsS.get(tid);
+  if (!L_ || L_.ids.length === 0) return;
+  const lastInterval = to >= termEnd;
+  let total = 0n;
+  for (const id of L_.ids) {
+    const s = L_.st.get(id)!, u = s.unpaid;
+    if (u === 0n) continue;
+    const pay = lastInterval ? u : (u * BigInt(to - from)) / BigInt(termEnd - from);
+    s.unpaid = u - pay; s.instalment = pay; total += pay;
+  }
+  Object.assign(L_, { instalment: total, left: total, carry: 0n, from, to, mark: from });
+};
+/** EcoOvercharge._returnStones: `pm` per thousand of what each stone has not been paid goes back to it. */
+const returnStones = (tid: bigint, pm: bigint, tx: string) => {
+  const L_ = landsS.get(tid);
+  if (!L_ || L_.ids.length === 0) return;
+  const inst = L_.instalment, dl = (L_.left * pm) / 1000n, dc = (L_.carry * pm) / 1000n;
+  L_.left -= dl; L_.carry -= dc;
+  const pend = dl + dc;
+  let seen = 0n, gave = 0n, total = 0n;
+  for (const id of L_.ids) {
+    const s = L_.st.get(id)!, du = (s.unpaid * pm) / 1000n;
+    s.unpaid -= du;
+    let dp = 0n;
+    if (s.instalment !== 0n) {
+      seen += s.instalment;
+      dp = seen === inst ? pend - gave : (pend * s.instalment) / inst;
+      gave += dp;
+      if (pm === 1000n) s.instalment = 0n;
+    }
+    total += du + dp;
+    back(tx, id, du + dp, s);
+  }
+  if (pm === 1000n) L_.instalment = 0n;
+  committedEv -= total; poolEv += total;
+};
+/** EcoOvercharge.cut: an acquired part of the land -- that share of the stones' unpaid, of the room, of the record's
+ *  balance (which drops) and of its allocation. */
+const cutRecord = (tid: bigint, r: Rec, pm: bigint, tx: string) => {
+  returnStones(tid, pm, tx);
+  const L_ = landsS.get(tid);
+  if (L_) { L_.room -= (L_.room * pm) / 1000n; L_.roomUsed = (L_.roomUsed * (1000n - pm) + 999n) / 1000n; }
+  settleRec(r);
+  const b = (r.balance * pm) / 1000n;
+  r.balance -= b; r.alloc -= (r.alloc * pm) / 1000n;
+  r.cutAmount = b; r.cutDone = tx;
+};
 const owners = new Map<bigint, string>();
 // the resale market: each EFT's order counter, its listing and its offers, as their events recorded them
 const orderCounter = new Map<bigint, number>();
 const resaleListings = new Map<bigint, { counter: number; price: bigint }>();
 const resaleOffers = new Map<string, { counter: number; price: bigint; expiry: number }>();
-let capExcess = 0n, closesCount = 0, moves = 0, fixes = 0;
-let committedEv = 0n, releasedEv = 0n, claimedEv = 0n, droppedEv = 0n;
-const LAND_CAP = 1_000_000n * WAD, MAX_BOOSTS = 8;
-/** M x 1e18 for a Relic of step r on land of step t: max(1, floor(sqrt(num x 1e36 / den))); 0 outside steps 1-32. */
+let releasedEv = 0n, claimedEv = 0n, droppedEv = 0n;
+const LAND_CAP = 1_000_000n * WAD;
+/** M x 1e18 for a stone of step r on land of step t: max(1, floor(sqrt(num x 1e36 / den))); 0 outside steps 1-32. */
 const multOf = (t: number, r: number) => {
   if (t === 0 || r === 0 || t > 32 || r > 32) return 0n;
   const num = fib(Math.min(t, 10)) * fib(t), den = fib(Math.min(r, 10)) * fib(r);
   return num <= den ? WAD : isqrt((num * 10n ** 36n) / den);
 };
-/** By transaction, the TR3 of free room and of the cap's excess the editions' events say drops, and what Tree dropped. */
-const unplacedDue = new Map<string, bigint>(), unplacedCredited = new Map<string, bigint>();
-const addTo = (m: Map<string, bigint>, k: string, v: bigint) => m.set(k, (m.get(k) ?? 0n) + v);
 const claims = new Map<bigint, { p: bigint; g: bigint; r: bigint }>();
 // the payments each transaction's events report, by recipient
 const evTx = new Map<string, Map<string, bigint>>();
@@ -559,27 +674,26 @@ for (const e of events) {
   const a = e.a, t = e.t;
   if (e.tx !== curTx) {
     flushTx(); curTx = e.tx; curT = t;
-    // an overcharge takes its commitment from the Relic before Tree settles the target's stream (EcoOvercharge.overcharge)
-    for (const x of (byTx.get(e.tx) ?? []).filter((y) => y.c === "overcharge" && y.name === "OverchargeCommitted")) {
-      const r = relicL.get(B(x.a.relicId));
-      if (!r) continue;
-      relicUpd(r);
-      commitFrom.set(B(x.a.relicId), r.balance);
-      r.balance -= B(x.a.commit); poolEv -= B(x.a.commit);
+    // the EFT's owner ends its land's overcharge during a hold (Model 4 §7.5): every stone gets back what is unpaid
+    const target = releaseTx.get(e.tx);
+    if (target !== undefined) {
+      const ac = accts.get(target);
+      stoneC.test(!!ac && (ac.holds & STOPS) !== 0, R(target), () => `the overcharge released with holds ${ac?.holds}: only during a hold`);
+      returnStones(target, 1000n, e.tx);
     }
   }
   if (a.tokenId !== undefined && (e.c === "core" || e.c === "bank" || e.c === "parties" || e.c === "challenge")) touched.add(B(a.tokenId));
   switch (`${e.c}.${e.name}`) {
     // ---- the rulebook ----
     case "countries.FlowDefined": flows.set(N(a.flowId), (a.steps as unknown[]).map(Number)); break;
-    case "countries.DefaultFeeSet": defaultV = B(a.baseFee); if (minW < 0n) minW = (defaultV * 2n) / 50n; break;
-    case "countries.MinFieldRateSet": minW = B(a.minFieldRate); break;
+    case "countries.DefaultFeeSet": defaultV = B(a.baseFee); if (minV < 0n) minV = defaultV; break;
+    case "countries.MinBaseFeeSet": minV = B(a.minBaseFee); break;
     case "countries.CountryEnabled": case "countries.SettingsApplied": case "countries.CountryFeesSet": {
       const x = countries.get(N(a.country));
       const s = a.settings ? { flowId: N(a.settings.flowId), min: N(a.settings.minTermYears), max: N(a.settings.maxTermYears), listing: N(a.settings.listingWindow), postSale: N(a.settings.postSaleWindow) } : x!.settings;
       const f = a.fees ? {
-        baseFee: B(a.fees.baseFee), deskRate: B(a.fees.deskRate), powerFee: B(a.fees.powerFee), agreementFee: B(a.fees.agreementFee),
-        registrationFixed: B(a.fees.registrationFixed), registrationPerHa: B(a.fees.registrationPerHa), fieldRate: B(a.fees.fieldRate),
+        baseFee: B(a.fees.baseFee), powerFee: B(a.fees.powerFee), agreementFee: B(a.fees.agreementFee),
+        registrationFixed: B(a.fees.registrationFixed), registrationPerHa: B(a.fees.registrationPerHa),
       } : x!.fees;
       countries.set(N(a.country), { settings: s, fees: f });
       break;
@@ -647,16 +761,16 @@ for (const e of events) {
         firstClaimant: Z, firstClaimUntil: 0, barred: Z, recordedAt: new Map(), ended: false, openedAt: t, rejected: false,
       };
       reqs.set(rid, r);
-      const f = st.fees, v = vOf(f), d = dOf(f);
-      const want = [verificationFeeOf(units, v, wOf(f)), v, reviewFeeOf(units, d)];
+      const f = st.fees, v = vOf(f);
+      const want = [verificationFeeOf(units, v), v, reviewFeeOf(units, deskOf(v))];
       // fees 3-5 (item 16): the power's only where the flow has a power, the agreement's only where it has an agreement
       r.wantPaper = [r.steps.includes(Step.POWER) ? f.powerFee : 0n, r.steps.includes(Step.AGREEMENT) ? f.agreementFee : 0n,
-        f.registrationFixed + (f.registrationPerHa * units) / 100n];
+        f.registrationFixed + (f.registrationPerHa * units) / 10_000n];
       const wantPaper = r.wantPaper[0] + r.wantPaper[1] + r.wantPaper[2];
       fees.test(r.vf === want[0] && r.af === want[1] && r.jf === want[2] && r.paper === wantPaper, `#${rid}`,
         () => `paid ${[r.vf, r.af, r.jf, r.paper].map(usd).join(" / ")}; the model gives ${[...want, wantPaper].map(usd).join(" / ")}`);
       // the land fits some edition, and the term the country's range (V12.1: the queue picks the edition, rule 1)
-      term.test(years >= st.settings.min && years <= st.settings.max && years >= 3 && years <= 100, `#${rid}`, () => `${years} years in ${country}: range ${st.settings.min}-${st.settings.max}`);
+      term.test(years >= st.settings.min && years <= st.settings.max && years >= 3 && years <= 99 && years % 3 === 0, `#${rid}`, () => `${years} years in ${country}: range ${st.settings.min}-${st.settings.max}`);
       break;
     }
     case "registry.RequestClaimed": {
@@ -689,8 +803,12 @@ for (const e of events) {
       break;
     }
     case "registry.VerificationSubmitted": {
-      const r = reqs.get(N(a.requestId))!;
-      acc.test(L(a.verifier) === r.verifier && t <= r.claimedAt + cfg.acceptance, `#${r.rid}`, () => `submitted ${days(t - r.claimedAt)} after the claim`);
+      const r = reqs.get(N(a.requestId))!, p = places.get(r.rid);
+      if (r.status === RequestStatus.VERIFIED) {
+        // a land placed more than a year after its verification is re-verified, title and score, by its verifier (§3.1)
+        wdw.test(!!p && p.stale && L(a.verifier) === r.verifier, `#${r.rid}`, () => `verified again ${date(t)} while VERIFIED${p?.stale ? "" : ", its place not waiting for a re-verification"}`);
+        if (p) p.stale = false;
+      } else acc.test(L(a.verifier) === r.verifier && t <= r.claimedAt + cfg.acceptance, `#${r.rid}`, () => `submitted ${days(t - r.claimedAt)} after the claim`);
       r.verifiedAt = t; r.status = RequestStatus.VERIFIED; r.cursor = 0; r.stepAt = t + cfg.watchdog; // the flow opens when the watchdog closes (D8)
       r.rejected = false;
       break;
@@ -807,7 +925,9 @@ for (const e of events) {
     }
     case "registry.FlowEntered": {
       const r = reqs.get(N(a.requestId))!;
-      wdw.test(t > r.verifiedAt + cfg.watchdog, `#${r.rid}`, () => `the flow began ${days(t - r.verifiedAt)} after the verification`);
+      const p = places.get(r.rid);
+      wdw.test(t > r.verifiedAt + cfg.watchdog && !!p && p.edition !== 0 && !p.stale, `#${r.rid}`,
+        () => `the flow began ${days(t - r.verifiedAt)} after the verification${p?.edition ? "" : ", its land not placed"}${p?.stale ? ", before its re-verification" : ""}`);
       r.status = RequestStatus.IN_FLOW; r.steps = flows.get(N(a.flowId)) ?? r.steps;
       break;
     }
@@ -1093,15 +1213,9 @@ for (const e of events) {
       // the floor at the request's own fees, whatever a later fee vote set (item 9)
       const p = B(a.startPrice), yearly = floorOf(rq.term, false, rq.jf0, rq.vf0);
       floorC.test(p >= yearly, R(c.tid), () => `listed from ${usd(p)}; the yearly floor is ${usd(yearly)} (fees ${usd(rq.vf0)} / ${usd(rq.jf0)}, ${rq.term} years)`);
-      // the place is fixed at the first listing (item 10)
+      // the paper flow opened at placement, so a land listed has its place, its allocation fixed (Model 4 §3.1)
       const pl = places.get(c.rid);
-      if (pl && !pl.listed) {
-        pl.listed = true;
-        const fx = inTx(e, "editions.Fixed", (x) => N(x.a.requestId) === c.rid).length > 0;
-        // the listing places every land queued ahead of it first, this one perhaps: a land unplaced (a gap) waits unfixed
-        const placed = pl.edition !== 0 || inTx(e, "editions.Placed", (x) => N(x.a.requestId) === c.rid).length > 0;
-        qFix.test(fx === placed, R(c.tid), () => `first listed with its place in edition ${pl.edition}; ${fx ? "" : "not "}fixed`);
-      }
+      asg.test(!!pl && pl.edition !== 0 && !pl.released, R(c.tid), () => `listed with no place (edition ${pl?.edition ?? 0})`);
       auc.test(N(a.endsAt) - N(a.startsAt) >= cfg.minAuction && N(a.startsAt) >= t, R(c.tid), () => `an auction of ${days(N(a.endsAt) - N(a.startsAt))}`);
       listings.push({ tid: c.tid, endsAt: N(a.endsAt) });
       break;
@@ -1403,133 +1517,132 @@ for (const e of events) {
       break;
     }
 
-    // ---- TR3: the editions (TR3 Model B items 10 and 15) ----
+    // ---- TR3 Model 4: the editions and the places (§3) ----
     case "editions.EditionOpened": {
       const n = N(a.edition), at = N(a.at);
-      let why = "";
-      if (n !== edLast + 1) why = `edition ${n} opened after ${edLast}`;
-      else if (ed !== 0) why = `edition ${n} opened while ${ed} is OPEN`;
-      else if (n > 1 && !edSettling[n - 1]) why = `edition ${n} opened before ${n - 1} settled`;
-      else if (n > LAST_EDITION) why = `edition ${n} opened after the last`;
-      else if (at !== t || N(a.step) !== stepOf(n)) why = `opened at ${date(at)}, step ${a.step}`;
-      cls.test(why === "", `edition ${n}`, () => why);
-      edOpened[n] = at; ed = n; edLast = n;
+      // the next opens exactly as the open one's room runs out: its placement follows in the same call
+      const filling = n === 1 || inTx(e, "editions.Placed", (x) => x.ord > e.ord && N(x.a.edition) === n - 1).length > 0;
+      cls.test(n === ed + 1 && n <= LAST_EDITION && at === t && filling && !ladderFull, `edition ${n}`,
+        () => `opened ${date(at)} after edition ${ed}${filling ? "" : ", with no placement filling it"}${ladderFull ? ", the ladder full" : ""}`);
+      edRoom[n] = PER_EDITION; edOpened[n] = at; ed = n;
       break;
     }
-    case "editions.EditionSettling": {
-      const en = N(a.edition);
-      // filled, or a land that did not fit the room left goes into the next (its Placed follows in the same call)
-      // (Edition 32: the land waits unplaced, and no land enters again -- Finished follows in the same call)
-      const over = inTx(e, "editions.Placed", (x) => x.ord > e.ord && B(x.a.landYears) > capOf(en) - edR[en]).length > 0
-        || (en === LAST_EDITION && inTx(e, "editions.Finished", (x) => x.ord > e.ord).length > 0);
-      cls.test(en === ed && !edSettling[en] && !edClosed[en] && B(a.placed) === edR[en] && (edR[en] === capOf(en) || over), `edition ${en}`,
-        () => `settled with ${a.placed} placed (replayed ${edR[en]} of ${capOf(en)}); the OPEN edition is ${ed}${over ? ", a land overflowing it" : ""}`);
-      edSettling[en] = true; ed = 0;
-      break;
-    }
-    case "editions.Finished": {
-      // when Edition 32 is full no land enters again (the 320M model)
-      cls.test(ed === 0 && edLast === LAST_EDITION && edSettling[LAST_EDITION] && !finishedEv, "edition 32",
-        () => `finished with edition ${edLast} the last opened, the OPEN ${ed}`);
-      finishedEv = true;
+    case "editions.LadderFull": {
+      const filling = inTx(e, "editions.Placed", (x) => x.ord > e.ord && N(x.a.edition) === LAST_EDITION).length > 0;
+      cls.test(ed === LAST_EDITION && !ladderFull && filling, "edition 32", () => `the ladder full with edition ${ed} open${filling ? "" : ", with no placement filling it"}`);
+      ladderFull = true;
       break;
     }
     case "editions.Reserved": {
-      const rid = N(a.requestId), units = B(a.landUnits), years = N(a.termYears), ly = B(a.landYears), le = ed !== 0 ? ed : edLast + 1;
-      // no room is held: the land need only fit the open edition's limit; none once Edition 32 is full
-      plc.test(ly === units * BigInt(years) && !places.has(rid) && !finishedEv, `#${rid}`, () => `reserved ${ly} land-years for ${units} units x ${years} years${finishedEv ? ", after Edition 32 filled" : ""}`);
-      land.test(units >= 1n && ly <= limitOf(le), `#${rid}`, () => `${N(units) / 100} ha for ${years} years: ${ly} land-years, the limit of edition ${le} is ${limitOf(le)}`);
-      places.set(rid, { rid, edition: 0, ly, units, full: 0n, fixed: false, listed: false, sold: false, released: false, seq: 0, queuedAt: 0 });
+      const rid = N(a.requestId), units = B(a.landUnits), years = N(a.termYears), ly = B(a.landYears);
+      plc.test(ly === units * BigInt(years) && !places.has(rid), `#${rid}`, () => `reserved ${ly} m2-years for ${units} m2 x ${years} years`);
+      land.test(units >= 100n && ly <= limitOf(LAST_EDITION) && years % 3 === 0, `#${rid}`, () => `${N(units) / 10_000} ha for ${years} years: ${ly} m2-years; Edition 32's limit is ${limitOf(LAST_EDITION)}`);
+      places.set(rid, { rid, units, years, ly, signedAt: t, turn: 0, stream: 0, edition: 0, rest: 0, alloc: 0n, placedAt: 0, stale: false, sold: false, released: false });
       break;
     }
     case "editions.Queued": {
+      // the first verification sets the turn, for good: the later of the sign-up's day 81 and the watchdog's close
       const rid = N(a.requestId), p = places.get(rid);
       const filed = inTx(e, "registry.VerificationSubmitted", (x) => N(x.a.requestId) === rid).length > 0;
-      plc.test(!!p && p.edition === 0 && !p.released && N(a.verifiedAt) === t && filed, `#${rid}`,
-        () => `queued ${date(N(a.verifiedAt))}${filed ? "" : " with no verification filed"}; its place: edition ${p?.edition}`);
-      if (p) p.queuedAt = t;
+      const watch = t + cfg.watchdog, bySignup = (p?.signedAt ?? 0) + TURN_DELAY;
+      const want = Math.max(watch, bySignup), signup = watch < bySignup;
+      plc.test(!!p && p.stream === 0 && !p.released && filed && N(a.turn) === want && !!a.bySignup === signup, `#${rid}`,
+        () => `turn ${date(N(a.turn))} (${a.bySignup ? "by sign-up" : "by watchdog"}); expected ${date(want)}${filed ? "" : ", with no verification filed"}${p?.stream ? ", queued before" : ""}`);
+      if (p) { p.turn = N(a.turn); p.stream = a.bySignup ? 2 : 1; }
+      break;
+    }
+    case "editions.PassedOver": {
+      const rid = N(a.requestId), p = places.get(rid), k = N(a.edition), next = nextInTurn(t);
+      let first = ed + 1;
+      while (p && first <= LAST_EDITION && p.ly > limitOf(first)) first++;
+      plc.test(!!p && next === p && p.ly > limitOf(ed) && k === first, `#${rid}`,
+        () => `passed over to edition ${k} (the first that takes ${p?.ly} m2-years is ${first}; the open edition ${ed} takes ${limitOf(ed)}); next in turn: ${next ? `#${next.rid}` : "none"}`);
+      if (p) { p.stream = 3; (lists.get(k) ?? lists.set(k, []).get(k)!).push(rid); }
       break;
     }
     case "editions.Placed": {
-      const rid = N(a.requestId), p = places.get(rid), en = N(a.edition), ly = B(a.landYears), seq = N(a.seq);
-      const want = p?.ly;
-      plc.test(!!p && p.edition === 0 && !p.released && en === ed && !edSettling[en] && !edClosed[en] && edR[en] + ly <= capOf(en) && ly === want
-        && seq === seqLast + 1 && p.queuedAt !== 0 && t > p.queuedAt + cfg.watchdog, `#${rid}`,
-        () => `placed ${ly} land-years (expected ${want}) in edition ${en} ${date(t)}, queued ${date(p?.queuedAt ?? 0)}; the OPEN edition is ${ed} with ${edR[en]} of ${capOf(en)} placed; seq ${seq} after ${seqLast}`);
-      edR[en] += ly; edLive[en]++; seqLast = seq;
-      if (p) { p.edition = en; p.ly = ly; p.seq = seq; }
+      const rid = N(a.requestId), p = places.get(rid), k = N(a.edition), alloc = B(a.allocation), restEd = N(a.restEdition), rest = B(a.restAllocation);
+      // the open edition when it was placed: an edition its placement filled opened just before this event, and the
+      // next land in turn was chosen before that
+      const opened = inTx(e, "editions.EditionOpened", (x) => x.ord < e.ord && N(x.a.edition) === k + 1).length > 0;
+      const open = opened ? k : ed, room = edRoom[k], cap = capOf(k);
+      // the land cap: no land takes more than 1,000,000 TR3 (only below the production scale does a title need more)
+      let need = p ? (p.ly * PER_EDITION) / cap : 0n;
+      if (need > MAX_BASE) need = MAX_BASE;
+      const next = nextInTurn(t, open);
+      let wa = need, wrE = 0, wr = 0n;
+      if (need > room) {
+        wa = room;
+        if (!(ladderFull || k === LAST_EDITION)) {
+          const used = (room * cap + PER_EDITION - 1n) / PER_EDITION;
+          wrE = k + 1; wr = p && p.ly > used ? ((p.ly - used) * PER_EDITION) / capOf(k + 1) : 0n;
+          if (wa + wr > MAX_BASE) wr = MAX_BASE - wa;
+        }
+      }
+      plc.test(!!p && next === p && p.edition === 0 && !p.released && t >= p.turn && k === open && p.ly <= limitOf(k) && alloc === wa && rest === wr && (wr === 0n ? restEd === 0 : restEd === wrE)
+        && !(ladderFull && room === 0n), `#${rid}`,
+        () => `placed in edition ${k} (open ${open}) ${date(t)}, turn ${date(p?.turn ?? 0)}: ${usd(alloc)} + ${usd(rest)} in ${restEd}; expected ${usd(wa)} + ${usd(wr)} in ${wrE} (room ${usd(room)}); next in turn ${next ? `#${next.rid}` : "none"}`);
+      edRoom[k] -= alloc; edPlaced[k] += alloc;
+      if (rest !== 0n) { edRoom[restEd] -= rest; edPlaced[restEd] += rest; }
+      placedOpenEv += alloc + rest;
+      if (p) {
+        if (p.stream === 3) lists.get(k)?.shift(); // its list's head (an earlier list's never: the earliest turn goes first)
+        for (const [, l] of lists) { const i = l.indexOf(rid); if (i >= 0) l.splice(i, 1); }
+        p.edition = k; p.rest = restEd; p.alloc = alloc + rest; p.placedAt = t;
+        // the paper flow opens now, or -- placed more than a year after its verification -- once re-verified (§3.1)
+        const rq = reqs.get(rid);
+        p.stale = !!rq && rq.verifiedAt !== 0 && t > rq.verifiedAt + cfg.year;
+        if (rq && rq.status === RequestStatus.VERIFIED && !p.stale) rq.stepAt = Math.max(rq.verifiedAt + cfg.watchdog, t);
+      }
       break;
     }
     case "editions.Released": {
-      const rid = N(a.requestId), p = places.get(rid), en = N(a.edition), ly = B(a.landYears);
+      const rid = N(a.requestId), p = places.get(rid), en = N(a.edition), alloc = B(a.allocation);
       const endedTx = inTx(e, "registry.RequestEnded", (x) => N(x.a.requestId) === rid && N(x.a.reason) !== 7).length > 0;
-      // a place released after its edition closed: that room drops to the Relics (none since item 10: a closed edition
-      // holds no live place)
-      const due = en !== 0 && edClosed[en] && !releasedAtClose.has(rid) ? (ly * PER_EDITION) / capOf(en) : 0n;
-      plRel.test(!!p && !p.released && !p.sold && p.edition === en && p.ly === ly && B(a.dropped) === due && endedTx, `#${rid}`,
-        () => `released edition ${en}, ${ly} land-years, ${usd(B(a.dropped))} dropped (expected ${usd(due)}); its place: edition ${p?.edition}, ${p?.ly}${endedTx ? "" : ", with no request ending"}`);
-      if (p) p.released = true;
-      if (en !== 0) { edR[en] -= ly; edLive[en]--; }
-      addTo(unplacedDue, e.tx, B(a.dropped));
+      const back = inTx(e, "editions.RoomReturned", (x) => N(x.a.source) === RS.RELEASED && N(x.a.id) === rid && B(x.a.amount) === alloc).length > 0;
+      plRel.test(!!p && !p.released && !p.sold && p.edition === en && p.alloc === alloc && endedTx && (en === 0 || alloc === 0n || back), `#${rid}`,
+        () => `released edition ${en}, ${usd(alloc)}; its place: edition ${p?.edition}, ${usd(p?.alloc ?? 0n)}${endedTx ? "" : ", with no request ending"}${back ? "" : ", its room not returned"}`);
+      if (p) { p.released = true; if (p.edition !== 0) placedOpenEv -= p.alloc; }
       break;
     }
-    case "editions.Moved": {
-      const rid = N(a.requestId), p = places.get(rid), from = N(a.from), to = N(a.to), ly = B(a.landYears);
-      const ok = !!p && !p.fixed && !p.listed && !p.sold && !p.released && p.edition === from && to < from && edOpened[to] !== 0 && !edClosed[to]
-        && fitsMove(to, ly) && !waitingFits(p.seq, to);
-      qMove.test(ok, `#${rid}`, () => `moved ${from} -> ${to}: fits ${fitsMove(to, ly)}, an earlier unlisted land fits ${p ? waitingFits(p.seq, to) : "?"}, listed ${p?.listed}, edition ${to} closed ${edClosed[to]}`);
-      edR[from] -= ly; edR[to] += ly; edLive[from]--; edLive[to]++;
-      if (p) p.edition = to;
-      moves++;
-      break;
-    }
-    case "editions.Fixed": {
-      const rid = N(a.requestId), p = places.get(rid), tid = reqs.get(rid)?.tokenId;
-      const listed = inTx(e, "market.AuctionListed", (x) => B(x.a.tokenId) === tid).length > 0;
-      const placedNow = inTx(e, "editions.Placed", (x) => N(x.a.requestId) === rid).length > 0;
-      qFix.test(!!p && !p.fixed && (listed || (p.listed && placedNow)) && p.edition === N(a.edition) && !p.released && !p.sold, `#${rid}`,
-        () => `fixed in edition ${a.edition}${listed ? " at its listing" : p?.listed && placedNow ? " placed after its listing" : " with no listing"}`);
-      if (p) p.fixed = true;
-      fixes++;
+    case "editions.RoomReturned": {
+      const src = N(a.source), amt = B(a.amount), to = N(a.toEdition), id = B(a.id);
+      // what freed it, in the same transaction
+      let why = false;
+      if (src === RS.RELEASED) why = inTx(e, "editions.Released", (x) => B(x.a.requestId) === id && B(x.a.allocation) === amt).length > 0;
+      else if (src === RS.EARLY_END) why = inTx(e, "tree.RewardEnded", (x) => B(x.a.tokenId) === id && B(x.a.toRoom) === amt).length > 0
+        || inTx(e, "parties.Acquired", (x) => B(x.a.tokenId) === id && N(x.a.permille) < 1000).length > 0;
+      else if (src === RS.END_HOLD) why = inTx(e, "tree.RewardEnded", (x) => B(x.a.tokenId) === id && !x.a.completed && B(x.a.toRoom) === amt).length > 0;
+      else if (src === RS.NO_WEIGHT) why = totalW === 0n && inTx(e, "overcharge.Drop", (x) => B(x.a.land) === id && B(x.a.amount) === amt && x.ord < e.ord).length > 0;
+      else if (src === RS.PAIR_CAP) why = inTx(e, "overcharge.GemsReleased", (x) => B(x.a.land) === id && B(x.a.toRoom) === amt).length > 0;
+      e4.test(why && to === ed && amt !== 0n, `${["a released place", "an early end", "an End-Date hold", "a drop with no weight", "a pair's excess"][src] ?? src} ${id}`,
+        () => `${usd(amt)} back to edition ${to} (the open one is ${ed})${why ? "" : ", with nothing in the transaction freeing it"}`);
+      edRoom[to] += amt;
+      if (src === RS.EARLY_END && !inTx(e, "tree.RewardEnded", (x) => B(x.a.tokenId) === id).length) { const s = streams.get(id); if (s) { s.alloc -= amt; s.cut += amt; } }
+      if (src === RS.PAIR_CAP) poolEv -= amt;
       break;
     }
     case "editions.Sold": {
-      const rid = N(a.requestId), p = places.get(rid), en = N(a.edition), ly = B(a.landYears);
-      const raw = (ly * PER_EDITION) / capOf(en), full = raw > MAX_BASE ? MAX_BASE : raw, excess = raw - full;
-      asg.test(!!p && p.fixed && !p.sold && !p.released && p.edition === en && p.ly === ly && B(a.allocation) === full && B(a.excess) === excess, `#${rid}`,
-        () => `sold ${ly} land-years in edition ${en} for ${usd(B(a.allocation))} (excess ${usd(B(a.excess))}); expected ${usd(full)}, its place edition ${p?.edition} with ${p?.ly}, fixed ${p?.fixed}`);
-      if (p) { p.sold = true; p.full = full; }
-      edS[en] += ly; edLive[en]--;
-      // the cap's excess drops to the Relics in the same call (Tree.assignEdition)
-      capExcess += excess;
-      addTo(unplacedDue, e.tx, excess);
+      const rid = N(a.requestId), p = places.get(rid), en = N(a.edition), alloc = B(a.allocation);
+      asg.test(!!p && p.edition === en && !p.sold && !p.released && p.alloc === alloc, `#${rid}`,
+        () => `activated in edition ${en} with ${usd(alloc)}; placed in ${p?.edition} with ${usd(p?.alloc ?? 0n)}`);
+      trCap.test(alloc <= MAX_BASE, `#${rid}`, () => `allocation ${usd(alloc)}`);
+      if (p) { p.sold = true; placedOpenEv -= p.alloc; }
       break;
     }
-    case "editions.EditionClosed": {
-      const en = N(a.edition), cap = capOf(en), due = edS[en] < cap ? ((cap - edS[en]) * PER_EDITION) / cap : 0n;
-      // a release that leaves no place to activate closes the edition before its own Released is emitted
-      const after = inTx(e, "editions.Released", (x) => x.ord > e.ord && N(x.a.edition) === en);
-      for (const x of after) releasedAtClose.add(N(x.a.requestId));
-      const placed = edR[en] - after.reduce((v, x) => v + B(x.a.landYears), 0n), live = edLive[en] - after.length;
-      // no clock (item 10): a SETTLING edition closes once every place in it has activated
-      cls.test(edSettling[en] && !edClosed[en] && live === 0 && B(a.placed) === placed && B(a.sold) === edS[en] && B(a.dropped) === due, `edition ${en}`,
-        () => `closed with ${a.placed} placed, ${a.sold} sold, ${usd(B(a.dropped))} dropped to the Relics; replayed ${placed}, ${edS[en]}, ${usd(due)}, ${live} places live, settling ${edSettling[en]}`);
-      edClosed[en] = true; closesCount++;
-      addTo(unplacedDue, e.tx, B(a.dropped));
-      break;
-    }
+
+    // ---- TR3: the stream (Tree) ----
     case "tree.EditionAssigned": {
       const tid = B(a.tokenId), p = places.get(reqOfToken.get(tid) ?? -1);
-      asg.test(!!p && p.sold && N(a.edition) === p.edition && B(a.landYears) === p.ly, R(tid), () => `activated in edition ${a.edition} with ${a.landYears}; sold in ${p?.edition} with ${p?.ly}`);
+      asg.test(!!p && p.sold && N(a.edition) === p.edition && B(a.landYears) === p.ly, R(tid), () => `activated in edition ${a.edition} with ${a.landYears}; placed in ${p?.edition} with ${p?.ly}`);
       break;
     }
     case "tree.RewardStarted": {
       const tid = B(a.tokenId), p = places.get(reqOfToken.get(tid) ?? -1), c = cov(tid)!;
-      rew.test(!!p && B(a.allocation) === p.full && N(a.edition) === p.edition && N(a.ecoScore) === c.score && !streams.has(tid), R(tid),
-        () => `${usd(B(a.allocation))} TR3 in edition ${a.edition} at score ${a.ecoScore}; the sale allocated ${usd(p?.full ?? 0n)} in ${p?.edition}, score ${c.score}`);
-      trCap.test(B(a.allocation) <= MAX_BASE, R(tid), () => `allocation ${usd(B(a.allocation))}`);
-      streams.set(tid, { alloc: B(a.allocation), edition: N(a.edition), score: N(a.ecoScore), entry: N(a.ecoScore), rescore: false, ended: false,
-        stream: 0n, credits: 0n, mark: 0, horizon: 0, held: false, boosts: [], boostCommitted: 0n, heldAtEnd: false, cut: 0n });
+      rew.test(!!p && B(a.allocation) === p.alloc && N(a.edition) === p.edition && N(a.ecoScore) === c.score && !streams.has(tid), R(tid),
+        () => `${usd(B(a.allocation))} TR3 in edition ${a.edition} at score ${a.ecoScore}; placed with ${usd(p?.alloc ?? 0n)} in ${p?.edition}, score ${c.score}`);
+      streams.set(tid, { alloc: B(a.allocation), edition: N(a.edition), score: N(a.ecoScore), rescore: false, ended: false,
+        stream: 0n, credits: 0n, toRoom: 0n, mark: 0, horizon: 0, held: false, heldAtEnd: false, cut: 0n, anchored: 0, overcharge: 0n });
       break;
     }
     case "tree.RewardHeld": { const s = streams.get(B(a.tokenId)); if (s) { s.held = true; if (a.rescoreOnLift) s.rescore = true; } break; }
@@ -1554,103 +1667,45 @@ for (const e of events) {
     case "tree.StreamReleased": {
       const tid = B(a.tokenId), s = streams.get(tid)!, amt = B(a.amount), score = N(a.score), through = N(a.through);
       const ver = inTx(e, "core.CovenantVerified", (x) => B(x.a.tokenId) === tid)[0];
-      // C9: a verification settles what the last one underwrote at the old score (unless the stream was stopped), then the
-      // rest at the score it records; anything else settles at the score in force, up to the horizon
+      // C9: a verification settles what the last one underwrote at the old score, then the rest at the score it records;
+      // what a stop held, at the lower of the two (§4.9); anything else settles at the score in force, up to the horizon
       const start = s.mark || cov(tid)!.termStart, cut = Math.min(s.horizon, t);
-      // a block's last cause lifted without a verification (Tree.onLift): the stream resumes
       if (!ver && s.held && !s.rescore && inTx(e, "core.CovenantUnblocked", (x) => B(x.a.tokenId) === tid).length > 0) s.held = false;
-      const oldPart = ver && !s.held && start < cut;
-      const want = ver ? (oldPart ? s.score : N(ver.a.ecoScore)) : s.score;
-      const reach = ver ? (oldPart ? through <= cut : through <= t) : through <= s.horizon && !s.held;
+      const named = ver ? N(ver.a.ecoScore) : s.score;
+      const oldPart = ver && !s.held && start < cut && through <= cut;
+      const want = ver ? (s.held ? Math.min(s.score, named) : oldPart ? s.score : named) : s.score;
+      const reach = ver ? through <= t : through <= s.horizon && !s.held;
       relScore.test(reach, R(tid), () => `released through ${date(through)} from ${date(start)}${ver ? " in a verification" : ""}; the horizon was ${date(s.horizon)}${s.held ? ", and the stream was stopped" : ""}`);
       s.mark = through;
-      // the score's shortfall: the ECOSCORE drop of this settle, which follows it; the commitments' payments precede it
+      // the span's shortfall: its Drop follows, after the stones' release (Tree._settle, EcoOvercharge.settle)
       const tx = byTx.get(e.tx)!, k = tx.indexOf(e);
-      let drop = 0n;
+      let drop = 0n, paidEv = 0n;
       for (let j = k + 1; j < tx.length; j++) {
         const x = tx[j];
-        if (B(x.a.tokenId ?? -1n) !== tid) continue;
-        if (["StreamReleased", "RewardEnded", "BoostPaid", "BoostCarried"].includes(x.name)) break;
-        if (x.name === "Dropped") { if (N(x.a.source) === 0) drop = B(x.a.amount); break; }
+        if (x.c === "tree" && x.name === "OverchargeReleased" && B(x.a.tokenId) === tid) { paidEv = B(x.a.amount); continue; }
+        if (x.c === "overcharge" && x.name === "Drop" && B(x.a.land) === tid) drop = B(x.a.amount);
+        break;
       }
       relScore.test(score === want && amt === ((amt + drop) * BigInt(score)) / 100n, R(tid), () => `released ${usd(amt)} at score ${score} (expected ${want}), ${usd(drop)} dropped for the shortfall`);
-      const span = amt + drop;
-      // the commitments: each pays span x q (all of what is left at the term's end) at the score, the rest carried back
-      const before: Ev[] = [];
-      for (let j = k - 1; j >= 0; j--) {
-        const x = tx[j];
-        if (B(x.a.tokenId ?? -1n) !== tid) continue;
-        if (x.name === "BoostPaid" || x.name === "BoostCarried") before.push(x); else break;
-      }
-      const last = through === cov(tid)!.termEnd;
-      for (const [bi, b] of s.boosts.entries()) {
-        const paid = before.filter((x) => x.name === "BoostPaid" && (x as any).boostIdx === bi).reduce((v, x) => v + B(x.a.amount), 0n);
-        const carried = before.filter((x) => x.name === "BoostCarried" && (x as any).boostIdx === bi).reduce((v, x) => v + B(x.a.amount), 0n);
-        const leftBefore = b.left + paid + carried;
-        let due = last ? leftBefore : (span * b.q) / WAD;
-        if (due > leftBefore) due = leftBefore;
-        const p = (due * BigInt(score)) / 100n;
-        ovc.test(paid === p && carried === due - p, R(tid), () => `the commitment of Relic ${b.relicId}: paid ${usd(paid)} and carried ${usd(carried)} on a span of ${usd(span)} at ${score}; expected ${usd(p)} and ${usd(due - p)}`);
-      }
-      // the land's Relic earns its points before the drop is shared (EcoOvercharge.settle)
-      const pts = amt + (score > s.entry ? (span * BigInt(score - s.entry)) / 100n : 0n);
-      const rl = relicL.get(relicOfTid.get(tid) ?? 0n);
-      if (rl && (rl.state === RS.CHARGING || rl.state === RS.AWAKE) && pts !== 0n) { relicUpd(rl); rl.points += pts; tPoints += pts; }
-      s.stream += amt; releasedEv += amt;
+      // the stones' instalments accrue with the stream, at its score (EcoOvercharge.accrue, before the release)
+      const paid = accrue(tid, through, score);
+      stoneC.test(paid === paidEv, R(tid), () => `the stones released ${usd(paidEv)}; the instalments give ${usd(paid)}`);
+      s.stream += amt; releasedEv += amt + paid; s.overcharge += paid;
+      const r = recs.get(tid); if (r) r.minted += amt;
       break;
     }
-    case "tree.BoostPaid": {
-      const s = streams.get(B(a.tokenId))!, i = boostIndex(e, s), b = s.boosts[i], amt = B(a.amount);
-      (e as any).boostIdx = i;
-      b.left -= amt; b.paid += amt; releasedEv += amt; committedEv -= amt;
-      break;
-    }
-    case "tree.BoostCarried": {
-      const s = streams.get(B(a.tokenId))!, i = boostIndex(e, s), b = s.boosts[i], amt = B(a.amount);
-      (e as any).boostIdx = i;
-      const back = inTx(e, "overcharge.Carried", (x) => B(x.a.relicId) === resolveRelic(b.relicId) && B(x.a.amount) === amt).length > 0;
-      ovc.test(back && amt <= b.left, R(B(a.tokenId)), () => `carried ${usd(amt)} of ${usd(b.left)} back to Relic ${b.relicId}${back ? "" : ", which did not receive it"}`);
-      b.left -= amt; b.carried += amt; committedEv -= amt;
-      break;
-    }
-    case "tree.Dropped": {
-      // everything land does not earn drops to the Relics, shared by points (the 320M model)
-      const tid = B(a.tokenId), s = streams.get(tid), src = N(a.source), amt = B(a.amount);
-      if (s) s.credits += amt;
-      // an acquired part: its share of the allocation not yet streamed is cut (the stream continues)
-      if (s && src === 2 && inTx(e, "parties.Acquired", (x) => B(x.a.tokenId) === tid && N(x.a.permille) < 1000).length > 0) s.cut += amt;
-      droppedEv += amt;
-      if (src === 3 || src === 4) addTo(unplacedCredited, e.tx, amt); // free room, or a land's TR3 above 1,000,000
-      relicShare(amt);
-      break;
-    }
+    case "tree.OverchargeReleased": break; // checked with its StreamReleased
     case "tree.RewardEnded": {
-      const tid = B(a.tokenId), s = streams.get(tid)!;
-      strCons.test(s.stream + s.credits === s.alloc && !s.ended, R(tid), () => `ended with ${usd(s.stream)} released and ${usd(s.credits)} dropped of ${usd(s.alloc)}`);
+      const tid = B(a.tokenId), s = streams.get(tid)!, rest = B(a.toRoom);
       const atEnd = inTx(e, "core.CovenantEnded", (x) => B(x.a.tokenId) === tid).length > 0;
       if (s.held && atEnd) s.heldAtEnd = true;
-      // completed: the End Date with no stop standing; an early end or a stop at the End Date shatters the Relic
-      ovc.test(!!a.completed === (atEnd && !s.held) && s.boosts.every((b) => b.left === 0n), R(tid),
-        () => `ended ${a.completed ? "completed" : "not completed"} (End Date ${atEnd}, stopped ${s.held}); commitments left ${usd(s.boosts.reduce((v, b) => v + b.left, 0n))}`);
-      s.ended = true; s.held = false;
-      break;
-    }
-    case "tree.BoostCommitted": {
-      const tid = B(a.tokenId), s = streams.get(tid)!, commit = B(a.commit), q = B(a.qE18), rid = B(a.relicId);
-      const oc = inTx(e, "overcharge.OverchargeCommitted", (x) => B(x.a.targetId) === tid && B(x.a.relicId) === rid)[0];
-      const r = relicL.get(rid);
-      const M = r ? multOf(stepOf(s.edition), stepOf(r.edition)) : 0n;
-      const left = s.alloc - s.stream - s.credits, balance = commitFrom.get(rid) ?? 0n;
-      let want = (left * M) / WAD;
-      const used = s.alloc - s.cut + s.boostCommitted, capRoom = LAND_CAP > used ? LAND_CAP - used : 0n;
-      if (capRoom < want) want = capRoom;
-      if (balance < want) want = balance;
-      ovc.test(!!r && r.state === RS.AWAKE && !!oc && B(oc.a.multiplierE18) === M && B(oc.a.commit) === commit && commit === want && commit > 0n
-        && q === (commit * WAD) / left && !s.ended && !s.held && s.boosts.length < MAX_BOOSTS && used + commit <= LAND_CAP, R(tid),
-        () => `Relic ${rid} (state ${r?.state}, edition ${r?.edition}, balance ${usd(balance)}) committed ${usd(commit)} at M = ${Number(M) / 1e18}; expected ${usd(want)} (allocation left ${usd(left)}, cap room ${usd(capRoom)}), q ${q}, ${s.boosts.length} commitments`);
-      committedEv += commit; // taken from the Relic at the transaction's start
-      s.boosts.push({ relicId: rid, left: commit, q, commit, paid: 0n, carried: 0n });
-      s.boostCommitted += commit;
+      const src = s.held && atEnd ? RS.END_HOLD : RS.EARLY_END;
+      const back = rest === 0n || inTx(e, "editions.RoomReturned", (x) => N(x.a.source) === src && B(x.a.id) === tid && B(x.a.amount) === rest).length > 0;
+      strCons.test(s.stream + s.credits + rest === s.alloc && !s.ended && back, R(tid),
+        () => `ended with ${usd(s.stream)} released, ${usd(s.credits)} dropped and ${usd(rest)} back to room, of ${usd(s.alloc)}${back ? "" : "; the room return is missing"}`);
+      // completed: the End Date with no stop standing; an early end or a stop at the End Date shatters the record
+      pairC.test(!!a.completed === (atEnd && !s.held), R(tid), () => `ended ${a.completed ? "completed" : "not completed"} (End Date ${atEnd}, stopped ${s.held})`);
+      s.toRoom += rest; s.ended = true; s.held = false;
       break;
     }
     case "tree.RewardClaimed": {
@@ -1671,63 +1726,179 @@ for (const e of events) {
       }
       break;
     }
-    // ---- the Relics (EcoOvercharge, the 320M model) ----
-    case "overcharge.RelicBorn": {
-      // born in Tree.startReward, just before its RewardStarted
-      const id = B(a.relicId), tid = B(a.tokenId), p = places.get(reqOfToken.get(tid) ?? -1);
-      ovc.test(!!p && p.sold && N(a.edition) === p.edition && !relicOfTid.has(tid) && inTx(e, "tree.RewardStarted", (x) => B(x.a.tokenId) === tid).length > 0, `Relic ${id}`,
-        () => `born with ${R(tid)} in edition ${a.edition}; its place is in ${p?.edition}`);
-      relicL.set(id, { edition: N(a.edition), state: RS.CHARGING, source: tid, points: 0n, balance: 0n, accAt: accPP });
-      relicOfTid.set(tid, id);
+
+    // ---- the records (EcoOvercharge, Model 4 §5-6) ----
+    case "overcharge.WeightSet": {
+      const tid = B(a.land), w = B(a.weight), s = streams.get(tid), c = cov(tid);
+      const nextOf = nextFor(e, tid);
+      let r = recs.get(tid), want = -1n, op = "";
+      if (!r) {
+        // born at the activation, just before RewardStarted
+        op = "born";
+        const st = inTx(e, "tree.RewardStarted", (x) => B(x.a.tokenId) === tid)[0];
+        const term = c?.term ?? 0, alloc = st ? B(st.a.allocation) : 0n;
+        r = { edition: st ? N(st.a.edition) : 0, state: RSt.ASLEEP, n: Math.floor(term / 3), releases: 0, term, weight: 0n, alloc, balance: 0n, minted: 0n, index: dropIdx, cutDone: "" };
+        recs.set(tid, r);
+        landsS.set(tid, { room: alloc, roomUsed: 0n, committed: 0n, allocation: alloc, instalment: 0n, left: 0n, carry: 0n, from: 0, to: 0, mark: 0, ids: [], st: new Map() });
+        want = weightOf(r, st ? N(st.a.ecoScore) : 0);
+        recC.test(!!st && !!c, R(tid), () => "a record born with no activation");
+      } else {
+        settleRec(r);
+        const ver = inTx(e, "core.CovenantVerified", (x) => B(x.a.tokenId) === tid)[0];
+        const through = ver ? N(ver.a.verifiedThrough) : 0;
+        if (nextOf === "RecordHeld") { op = "hold"; recC.test(r.state === RSt.ASLEEP || r.state === RSt.PAUSED, R(tid), () => `held from state ${r!.state}`); r.state = RSt.HELD; want = 0n; }
+        else if (nextOf === "RecordPaused") {
+          op = "pause";
+          const due = c ? lateAtOf(c) : 0;
+          recC.test(r.state === RSt.ASLEEP && !!c && due !== 0 && t > due, R(tid), () => `paused from state ${r!.state} ${date(t)}; its verification was overdue from ${due ? date(due) : "never"}`);
+          r.state = RSt.PAUSED; want = 0n;
+        } else if (nextOf === "GemsReleased" || nextOf === "RecordShattered") {
+          // the term ended: every stone gets back what it has not been paid, first (EcoOvercharge.end)
+          op = "end"; returnStones(tid, 1000n, e.tx); r.state = RSt.CLOSED; want = 0n;
+        } else if (nextOf === "PartlyAcquired") {
+          op = "cut";
+          const pa = inTx(e, "overcharge.PartlyAcquired", (x) => B(x.a.land) === tid && x.ord > e.ord)[0];
+          cutRecord(tid, r, BigInt(N(pa.a.permille)), e.tx);
+          want = weightOf(r, s?.score ?? 0);
+        } else if (ver && s && through > s.anchored) {
+          // a Loop Anchor (§6.3): the withheld part back to the stones, the releases due (made as one pair, above), the
+          // weight from the score just named, 0 after the last interval, and the next interval's instalments
+          op = "anchor";
+          confirm(tid, e.tx);
+          const due = Math.min(Math.floor((through * c!.interval) / (3 * cfg.year)), r.n - 1);
+          const paired = inTx(e, "overcharge.GemsReleased", (x) => B(x.a.land) === tid && x.ord < e.ord).length > 0;
+          pairC.test(paired === due > r.releases, R(tid), () => `the anchor confirming interval ${through}: ${due} releases due, ${r!.releases} made, ${paired ? "a pair made" : "no pair"}`);
+          r.releases = Math.max(r.releases, due);
+          r.state = RSt.ASLEEP;
+          const last = through >= c!.total;
+          want = last ? 0n : weightOf(r, N(ver.a.ecoScore));
+          s.anchored = through;
+          const from = c!.termStart + through * c!.interval, to = Math.min(from + c!.interval, c!.termEnd);
+          if (from < c!.termEnd) openInstalments(tid, from, to, c!.termEnd);
+        } else {
+          // a hold lifted: by a verification off schedule, or the Council, the Deed restored, an upheld 3E
+          op = "lift";
+          recC.test(r.state === RSt.HELD || r.state === RSt.PAUSED, R(tid), () => `lifted from state ${r!.state}`);
+          r.state = RSt.ASLEEP;
+          want = weightOf(r, ver ? N(ver.a.ecoScore) : s?.score ?? 0);
+        }
+      }
+      recC.test(w === want, R(tid), () => `weight ${usd(w)} at ${op}; the record gives ${usd(want)} (allocation ${usd(r!.alloc)}, ${r!.term} years, releases ${r!.releases} of ${r!.n})`);
+      totalW += w - r.weight; r.weight = w;
       break;
     }
-    case "overcharge.RelicWoke": {
-      const id = B(a.relicId), r = relicL.get(id)!, tid = B(a.tokenId);
-      relicUpd(r);
-      const done = inTx(e, "tree.RewardEnded", (x) => B(x.a.tokenId) === tid && !!x.a.completed).length > 0;
-      ovc.test(r.state === RS.CHARGING && done && L(a.owner) === owners.get(tid) && B(a.balance) === r.balance && B(a.points) === r.points, `Relic ${id}`,
-        () => `woke for ${short(a.owner)} with ${usd(B(a.balance))} and ${usd(B(a.points))} points; replayed ${usd(r.balance)}, ${usd(r.points)}; the EFT's owner ${short(owners.get(tid) ?? Z)}, completed ${done}`);
-      r.state = RS.AWAKE;
+    case "overcharge.RecordHeld": case "overcharge.RecordPaused": break; // with their WeightSet
+    case "overcharge.Drop": {
+      const tid = B(a.land), amt = B(a.amount);
+      // a shattered record's balance (already held here), or a land's shortfall from its stream
+      const shatter = inTx(e, "overcharge.RecordShattered", (x) => B(x.a.land) === tid && x.ord < e.ord).length > 0
+        || inTx(e, "overcharge.PartlyAcquired", (x) => B(x.a.land) === tid && x.ord < e.ord).length > 0;
+      if (!shatter) { const s = streams.get(tid); if (s) s.credits += amt; }
+      if (totalW === 0n) {
+        const back = inTx(e, "editions.RoomReturned", (x) => N(x.a.source) === RS.NO_WEIGHT && B(x.a.id) === tid && B(x.a.amount) === amt && x.ord > e.ord).length > 0;
+        recC.test(back, R(tid), () => `${usd(amt)} dropped with no weight anywhere, and not returned to room`);
+        if (shatter) poolEv -= amt;
+      } else {
+        dropIdx += (amt * INDEX) / totalW;
+        if (!shatter) poolEv += amt;
+      }
+      droppedEv += amt;
       break;
     }
-    case "overcharge.RelicShattered": {
-      const id = B(a.relicId), r = relicL.get(id)!, tid = B(a.tokenId), pm = BigInt(N(a.permille));
-      relicUpd(r);
-      const amt = (r.balance * pm) / 1000n, pts = (r.points * pm) / 1000n;
-      const why = pm === 1000n ? inTx(e, "tree.RewardEnded", (x) => B(x.a.tokenId) === tid && !x.a.completed).length > 0
-        : inTx(e, "parties.Acquired", (x) => B(x.a.tokenId) === tid && BigInt(N(x.a.permille)) === pm).length > 0;
-      ovc.test(r.state === RS.CHARGING && why && B(a.balance) === amt && B(a.points) === pts, `Relic ${id}`,
-        () => `shattered ${pm}‰: ${usd(B(a.balance))} and ${usd(B(a.points))} points; replayed ${usd(amt)}, ${usd(pts)}`);
-      r.balance -= amt; r.points -= pts; tPoints -= pts; poolEv -= amt;
-      if (pm === 1000n) r.state = RS.SHATTERED;
-      if (amt !== 0n) relicShare(amt);
+    case "overcharge.RecordShattered": {
+      const tid = B(a.land), r = recs.get(tid)!;
+      settleRec(r);
+      recC.test(B(a.balance) === r.balance && r.state === RSt.CLOSED, R(tid), () => `shattered ${usd(B(a.balance))}; the record holds ${usd(r.balance)}, state ${r.state}`);
+      r.balance = 0n;
+      break;
+    }
+    case "overcharge.PartlyAcquired": {
+      const tid = B(a.land), r = recs.get(tid)!, pm = BigInt(N(a.permille));
+      if (r.cutDone !== e.tx) cutRecord(tid, r, pm, e.tx);
+      recC.test(B(a.shattered) === r.cutAmount, R(tid), () => `an acquired ${pm}‰ shattered ${usd(B(a.shattered))}; the record gives ${usd(r.cutAmount ?? 0n)}`);
+      break;
+    }
+    case "overcharge.GemsReleased": {
+      const tid = B(a.land), r = recs.get(tid)!, x = B(a.amount), excess = B(a.toRoom);
+      settleRec(r);
+      const b = r.balance, wantX = b < r.minted ? b : r.minted;
+      const ending = r.state === RSt.CLOSED;
+      const release = N(a.release), wantRelease = ending ? r.n : r.releases + 1;
+      const owner = owners.get(tid) ?? Z, payee = accts.get(tid)?.shareToPatron ? owner : L(cov(tid)?.guardian ?? Z);
+      const pg = B(a.patronGem), gg = B(a.guardianGem);
+      const okGems = x === 0n ? pg === 0n && gg === 0n
+        : pg !== 0n && gemOwner.get(pg) === owner && (x / 2n === 0n ? gg === 0n : gg !== 0n && gemOwner.get(gg) === payee);
+      pairC.test(x === wantX && excess === b - wantX && release === wantRelease && okGems, R(tid),
+        () => `pair ${release} (expected ${wantRelease}): ${usd(x)} in gems ${pg} / ${gg}, ${usd(excess)} to room; the record holds ${usd(b)}, its land minted ${usd(r.minted)} since its last pair; to ${short(gemOwner.get(pg) ?? Z)} / ${short(gemOwner.get(gg) ?? Z)}, expected the owner ${short(owner)} / the payee ${short(payee)}`);
+      if (pg !== 0n) gemsL.set(pg, { edition: r.edition, half: 1, release, land: tid, balance: x - x / 2n, open: 0 });
+      if (gg !== 0n) gemsL.set(gg, { edition: r.edition, half: 2, release, land: tid, balance: x / 2n, open: 0 });
+      if (ending) r.releases = r.n;
+      r.balance = 0n; r.minted = 0n;
+      break;
+    }
+    case "overcharge.Transfer": {
+      // the gems are ERC-721s: minted at a pair, burned when fused
+      gemOwner.set(B(a.tokenId), L(a.to));
+      break;
+    }
+
+    // ---- gems and stones (Model 4 §7-8) ----
+    case "overcharge.Overcharged": {
+      const tid = B(a.target), id = B(a.gem), c = B(a.commitment), m = B(a.multiplierE18);
+      const g = gemsL.get(id), L_ = landsS.get(tid), r = recs.get(tid), cv = cov(tid), ac = accts.get(tid);
+      const okLand = !!cv && !!ac && cv.status === CovenantStatus.ACTIVE && cv.through === 0 && t < cv.termStart + cv.interval && (ac.holds & STOPS) === 0;
+      const prev = inTx(e, "overcharge.Overcharged", (x) => B(x.a.target) === tid && x.ord < e.ord).pop();
+      const pg = prev ? gemsL.get(B(prev.a.gem)) : undefined;
+      const inOrder = !prev || !pg || !g || pg.edition < g.edition || (pg.edition === g.edition && B(prev.a.gem) < id);
+      const wantM = g && r ? multOf(stepOf(r.edition), stepOf(g.edition)) : 0n;
+      let want = 0n;
+      if (g && L_) {
+        const roomLeft = L_.room > L_.roomUsed ? L_.room - L_.roomUsed : 0n;
+        want = (wantM * roomLeft) / WAD;
+        const used = L_.allocation + L_.committed, cap = LAND_CAP > used ? LAND_CAP - used : 0n;
+        if (want > cap) want = cap;
+        if (want > g.balance) want = g.balance;
+      }
+      const owned = !!g && gemOwner.get(id) === owners.get(tid);
+      stoneC.test(okLand && inOrder && owned && m === wantM && c === want && c !== 0n, R(tid),
+        () => `gem ${id} (edition ${g?.edition}, ${usd(g?.balance ?? 0n)} carats) set ${usd(c)} at M = ${Number(m) / 1e18}; expected ${usd(want)} at ${Number(wantM) / 1e18}${okLand ? "" : ", into land that is not new"}${inOrder ? "" : ", out of edition order"}${owned ? "" : ", not its EFT owner's"}`);
+      if (g && L_) {
+        let st = L_.st.get(id);
+        if (!st) { st = { set: true, unpaid: 0n, instalment: 0n }; L_.st.set(id, st); L_.ids.push(id); g.open++; }
+        else if (st.unpaid === 0n) g.open++;
+        stoneC.test(L_.ids.length <= 21, R(tid), () => `${L_.ids.length} stones set`);
+        L_.roomUsed += (c * WAD + m - 1n) / m; L_.committed += c; st.unpaid += c; g.balance -= c;
+        trCap.test(L_.allocation + L_.committed <= LAND_CAP, R(tid), () => `allocation ${usd(L_.allocation)} with ${usd(L_.committed)} committed`);
+      }
+      poolEv -= c; committedEv += c;
       break;
     }
     case "overcharge.Carried": {
-      const r = relicL.get(B(a.relicId))!;
-      r.balance += B(a.amount); poolEv += B(a.amount);
+      const k = `${e.tx}|${B(a.gem)}|${B(a.amount)}`;
+      carriedEv.set(k, (carriedEv.get(k) ?? 0) + 1);
       break;
     }
     case "overcharge.Transmuted": {
-      const ia = B(a.relicId), ib = B(a.forged), x = relicL.get(ia)!, y = relicL.get(ib)!;
-      relicUpd(x); relicUpd(y);
-      const ok = x.state === RS.AWAKE && y.state === RS.AWAKE && x.edition === y.edition && x.edition >= 2;
-      x.edition -= 1; x.points += y.points; x.balance += y.balance;
-      ovc.test(ok && N(a.edition) === x.edition && B(a.points) === x.points && B(a.balance) === x.balance, `Relic ${ia}`,
-        () => `forged with ${ib} into edition ${a.edition}, ${usd(B(a.balance))} and ${usd(B(a.points))} points; replayed ${x.edition}, ${usd(x.balance)}, ${usd(x.points)}`);
-      y.points = 0n; y.balance = 0n; y.state = RS.FORGED; forgedInto.set(ib, ia);
+      const ids = (a.ids as unknown[]).map((x) => B(x)), into = B(a.into), first = gemsL.get(into);
+      let sum = 0n, ok = !!first && ids.length >= 2 && ids[0] === into, oneLand = true;
+      const owner = gemOwner.get(into);
+      for (const [i, id] of ids.entries()) {
+        const g = gemsL.get(id);
+        if (!g || !first || g.edition !== first.edition || g.open !== 0 || (i > 0 && id === into)) ok = false;
+        if (g && first && g.land !== first.land) oneLand = false;
+        // the others are burned in this call: their owner, before, is the caller's
+        if (i > 0 && !inTx(e, "overcharge.Transfer", (x) => B(x.a.tokenId) === id && L(x.a.from) === owner && L(x.a.to) === Z).length) ok = false;
+        sum += g?.balance ?? 0n;
+      }
+      gemC.test(ok && sum <= CARAT_CAP, `gem ${into}`, () => `fused ${ids.join(", ")} into ${into}: ${usd(sum)} carats${sum > CARAT_CAP ? ", above the cap" : ""}`);
+      for (const id of ids.slice(1)) { const g = gemsL.get(id); if (g) { g.balance = 0n; g.burned = true; } }
+      if (first) { first.balance = sum; first.half = 3; if (!oneLand) { first.land = 0n; first.release = 0; } }
       break;
     }
-    case "overcharge.OverchargeCommitted": break; // checked with Tree's BoostCommitted, in the same call
+    case "overcharge.MetadataUpdate": break;
   }
 }
 flushTx();
-// in every transaction, the free room and the cap's excess the editions report are what Tree dropped to the Relics
-for (const tx of new Set([...unplacedDue.keys(), ...unplacedCredited.keys()])) {
-  const due = unplacedDue.get(tx) ?? 0n, got = unplacedCredited.get(tx) ?? 0n, ev = byTx.get(tx)?.[0];
-  e4.test(got === due, `block ${ev?.block ?? "?"}`, () => `the editions report ${usd(due)} of free room and cap excess; Tree dropped ${usd(got)}`);
-}
-
 // =====================================================================================
 // The state now, against the replay
 // =====================================================================================
@@ -1766,7 +1937,7 @@ const covNow = await Promise.all(tids.map(async (tid) => {
   ]);
   return { tid, c, a, pool: B(pool), seat: seatNow, rw, holder: L(holderNow) };
 }));
-let claimable = 0n, pendingNow = 0n, unstreamedEv = 0n, livePlaces = 0n, verifierSummary = { terms: 0, share: 0 };
+let claimable = 0n, pendingNow = 0n, unstreamedEv = 0n, verifierSummary = { terms: 0, share: 0 };
 for (const x of covNow) {
   const c = covs.get(x.tid)!, ac = accts.get(x.tid), s = streams.get(x.tid), pl = pools.get(x.tid);
   // the money
@@ -1817,109 +1988,140 @@ for (const x of covNow) {
     const cl = claims.get(x.tid) ?? { p: 0n, g: 0n, r: 0n };
     trSplit.test(patron === rel - gross && guardian === gross - refSlot && referral === refSlot && cl.p === B(v.patronPaid) && cl.g + cl.r === B(v.guardianPaid) + B(v.referralPaid), R(x.tid),
       () => `released ${usd(rel)}: patron ${usd(patron)}, landowner ${usd(guardian)}, referral ${usd(referral)}; claimed ${usd(cl.p)} / ${usd(cl.g + cl.r)}`);
-    trCap.test(B(v.landEarned) <= B(v.allocation) && B(v.released) - B(v.boostPaid) === s.stream, R(x.tid), () => `land TR3 ${usd(B(v.landEarned))} of ${usd(B(v.allocation))}, released ${usd(B(v.released) - B(v.boostPaid))} (the events released ${usd(s.stream)})`);
+    trCap.test(B(v.landEarned) <= B(v.allocation) && B(v.released) - B(v.overchargePaid) === s.stream && B(v.overchargePaid) === s.overcharge && B(v.allocation) === s.alloc, R(x.tid),
+      () => `land TR3 ${usd(B(v.landEarned))} of ${usd(B(v.allocation))} (replayed ${usd(s.alloc)}), released ${usd(B(v.released) - B(v.overchargePaid))} and ${usd(B(v.overchargePaid))} of stones' (the events released ${usd(s.stream)} and ${usd(s.overcharge)})`);
     hzn.test(N(v.horizon) === s.horizon, R(x.tid), () => `Tree has the horizon ${date(N(v.horizon))}; replayed ${date(s.horizon)}`);
     pendingNow += B(v.pending);
-    if (!s.ended) strCons.test(s.stream + s.credits <= s.alloc, R(x.tid), () => `${usd(s.stream)} released and ${usd(s.credits)} dropped of ${usd(s.alloc)}`);
-    // the commitments: what is left, what was paid, and the land cap with every commitment made
-    const left = s.boosts.reduce((v, b) => v + b.left, 0n), paid = s.boosts.reduce((v, b) => v + b.paid, 0n);
-    ovc.test(B(v.boostLeft) === left && B(v.boostPaid) === paid && B(v.boostCommitted) === s.boostCommitted && N(v.boosts) === s.boosts.length
-      && s.boosts.every((b) => b.paid + b.carried + b.left === b.commit), R(x.tid),
-      () => `Tree: ${v.boosts} commitments, ${usd(B(v.boostLeft))} left, ${usd(B(v.boostPaid))} paid; replayed ${s.boosts.length}, ${usd(left)}, ${usd(paid)}`);
-    trCap.test(s.alloc - s.cut + s.boostCommitted <= LAND_CAP, R(x.tid), () => `allocation ${usd(s.alloc - s.cut)} (after acquisitions) with ${usd(s.boostCommitted)} committed`);
+    if (!s.ended) strCons.test(s.stream + s.credits <= s.alloc && B(v.allocationLeft) === s.alloc - s.stream - s.credits, R(x.tid),
+      () => `${usd(s.stream)} released and ${usd(s.credits)} dropped of ${usd(s.alloc)}; Tree has ${usd(B(v.allocationLeft))} left`);
     claimable += B(v.patronClaimable) + B(v.guardianClaimable) + B(v.referralClaimable) + gHeld + rHeld;
     if (accession) trSplit.test(B(v.guardianClaimable) + B(v.referralClaimable) === 0n, R(x.tid), () => "a buyer's accession is pending, yet the landowner's side shows claimable");
   }
 }
-// the lands sold and the allocations they carry, less what each stream has accounted
-for (const p of places.values()) {
-  if (!p.sold) continue;
-  livePlaces += p.full;
-  const tid = [...reqOfToken].find(([, rid]) => rid === p.rid)?.[0];
-  const s = tid !== undefined ? streams.get(tid) : undefined;
-  unstreamedEv += p.full - (s ? s.stream + s.credits : 0n);
-}
-// a reservation never released must belong to a request still under way, or one that ended in its sale
+// the active allocations not yet released or dropped, and the places: every request ended without its sale released
+for (const s of streams.values()) unstreamedEv += s.alloc - s.stream - s.credits - s.toRoom;
 for (const p of places.values()) {
   const r = reqs.get(p.rid)!;
-  if (!p.released && r.ended) plRel.test(p.sold && E("registry.RequestEnded").some((e) => N(e.a.requestId) === p.rid && N(e.a.reason) === 7), `#${p.rid}`, () => "its request ended without a sale, yet its reservation was never released");
+  if (!p.released && r.ended) plRel.test(p.sold && E("registry.RequestEnded").some((e) => N(e.a.requestId) === p.rid && N(e.a.reason) === 7), `#${p.rid}`, () => "its request ended without a sale, yet its place was never released");
+  // a land whose turn came long ago is placed, or waits for an edition not yet open, or (after Edition 32) for room
+  if (p.stream === 1 || p.stream === 2) {
+    const waits = p.edition === 0 && !p.released && p.turn + 30 * DAY < now && !(ladderFull && edRoom[LAST_EDITION] === 0n);
+    plc.test(!waits, `#${p.rid}`, () => `its turn came ${date(p.turn)}, and it is still not placed`);
+  }
 }
 
-// the editions: the replay against EcoEditions, and the supply breakdown
+// the editions and the places: the replay against EcoEditions now
 {
-  const upTo = Math.max(edLast + 1, LAST_EDITION);
-  const [curNow, ...eds] = await Promise.all([rd("editions", "current"),
-    ...Array.from({ length: upTo }, (_, i) => rd("editions", "editionOf", [i + 1]))]);
-  const stateOf = (n: number) => (edClosed[n] ? 3 : edOpened[n] === 0 ? 0 : edSettling[n] ? 2 : 1);
-  for (let n = 1; n <= upTo; n++) {
+  const [curNow, fullNow, openNow, ...eds] = await Promise.all([rd("editions", "current"), rd("editions", "full"), rd("editions", "placedOpen"),
+    ...Array.from({ length: LAST_EDITION }, (_, i) => rd("editions", "rawEdition", [i + 1]))]);
+  for (let n = 1; n <= LAST_EDITION; n++) {
     const x = eds[n - 1];
-    edState.test(B(x.placed) === edR[n] && B(x.sold) === edS[n] && N(x.state) === stateOf(n) && N(x.openedAt) === edOpened[n], `edition ${n}`,
-      () => `EcoEditions: placed ${x.placed}, sold ${x.sold}, state ${x.state}, opened ${date(N(x.openedAt))}; replayed ${edR[n]}, ${edS[n]}, ${stateOf(n)}, ${date(edOpened[n])}`);
-    // a SETTLING edition with no place left to activate has closed (item 10)
-    if (edSettling[n] && !edClosed[n]) cls.test(edLive[n] > 0, `edition ${n}`, () => "settling with every place activated, yet not closed");
+    edState.test(B(x.room) === edRoom[n] && B(x.placed) === edPlaced[n] && N(x.openedAt) === edOpened[n], `edition ${n}`,
+      () => `EcoEditions: room ${usd(B(x.room))}, placed ${usd(B(x.placed))}, opened ${date(N(x.openedAt))}; replayed ${usd(edRoom[n])}, ${usd(edPlaced[n])}, ${date(edOpened[n])}`);
   }
-  edState.test(N(curNow) === ed, "current", () => `EcoEditions' current edition ${curNow}; replayed ${ed}`);
-  // every request's place
+  edState.test(N(curNow) === ed && !!fullNow === ladderFull && B(openNow) === placedOpenEv, "the ladder",
+    () => `EcoEditions: edition ${curNow} open, full ${fullNow}, ${usd(B(openNow))} placed and not active; replayed ${ed}, ${ladderFull}, ${usd(placedOpenEv)}`);
   const pls = [...places.values()];
   const resNow = await Promise.all(pls.map((p) => rd("editions", "reservationOf", [BigInt(p.rid)])));
   pls.forEach((p, i) => {
     const x = resNow[i];
-    edState.test(N(x.edition) === p.edition && B(x.landYears) === p.ly && !!x.sold === p.sold && !!x.released === p.released && !!x.fixed_ === p.fixed, `#${p.rid}`,
-      () => `EcoEditions: edition ${x.edition}, ${x.landYears} land-years, fixed ${x.fixed_}, sold ${x.sold}, released ${x.released}; replayed ${p.edition}, ${p.ly}, ${p.fixed}/${p.listed}, ${p.sold}, ${p.released}`);
+    edState.test(N(x.edition) === p.edition && N(x.restEdition) === p.rest && B(x.allocation) === p.alloc && N(x.turn) === p.turn && N(x.stream) === p.stream
+      && !!x.sold === p.sold && !!x.released === p.released, `#${p.rid}`,
+      () => `EcoEditions: edition ${x.edition} (+${x.restEdition}), ${usd(B(x.allocation))}, turn ${date(N(x.turn))}, stream ${x.stream}, sold ${x.sold}, released ${x.released}; replayed ${p.edition} (+${p.rest}), ${usd(p.alloc)}, ${date(p.turn)}, ${p.stream}, ${p.sold}, ${p.released}`);
   });
-  // the TR3 of the editions' room not yet sold: editions not finally closed
-  let unsoldEv = 0n;
-  for (let n = 1; n <= LAST_EDITION; n++) if (!edClosed[n]) unsoldEv += ((capOf(n) - edS[n]) * PER_EDITION) / capOf(n);
-  const [sb, unplaced, supply, mp, mg, mr] = await Promise.all([rd("tree", "supplyBreakdown"), rd("editions", "unallocatedTR3"), rd("tree", "totalSupply"),
+
+  // the supply identity (Model 4 §10): every part as the events give it, summing to 320,000,000 exactly
+  const [sp, supply, mp, mg, mr] = await Promise.all([rd("lens", "supply"), rd("tree", "totalSupply"),
     rd("tree", "mintedToPatrons"), rd("tree", "mintedToGuardians"), rd("tree", "mintedToReferrers")]);
   trSup.test(B(supply) === claimedEv && B(supply) === B(mp) + B(mg) + B(mr), "TREE", () => `supply ${usd(B(supply))}, claims ${usd(claimedEv)}, minted to the three parties ${usd(B(mp) + B(mg) + B(mr))}`);
+  const room = edRoom[ed];
   const parts: [string, bigint, bigint][] = [
-    ["minted", B(sb.minted), claimedEv], ["owed", B(sb.owed), releasedEv - claimedEv], ["relics", B(sb.relics), poolEv],
-    ["committed", B(sb.committed), committedEv], ["unstreamed", B(sb.unstreamed), unstreamedEv], ["unsold", B(unplaced), unsoldEv],
+    ["unallocated", B(sp.unallocated), BigInt(LAST_EDITION - ed) * PER_EDITION], ["open room", B(sp.openRoom), ladderFull ? 0n : room],
+    ["room after 32", B(sp.roomAfter32), ladderFull ? room : 0n], ["placed, not active", B(sp.placedOpen), placedOpenEv],
+    ["unstreamed", B(sp.unstreamed), unstreamedEv], ["owed", B(sp.owed), releasedEv - claimedEv], ["minted", B(sp.minted), claimedEv],
+    ["records and gems", B(sp.held), poolEv], ["committed", B(sp.committed), committedEv],
   ];
   for (const [what, chain, ev] of parts) brk.test(chain === ev, what, () => `the chain has ${usd(chain)}, the events give ${usd(ev)}`);
-  const sum = B(sb.minted) + B(sb.owed) + B(sb.relics) + B(sb.committed) + B(sb.unstreamed) + B(sb.unallocated);
-  const dust = B(sb.unallocated) - B(unplaced), bound = BigInt(E("editions.Reserved").length + closesCount + 22);
-  brk.test(sum === MAX_SUPPLY && dust >= 0n && dust <= bound, "320,000,000", () => `the parts sum to ${usd(sum)}; unallocated ${usd(B(sb.unallocated))} vs unsold ${usd(B(unplaced))} (dust ${dust} wei, at most ${bound})`);
+  const sum = parts.reduce((x, p) => x + p[1], 0n), sumEv = parts.reduce((x, p) => x + p[2], 0n);
+  brk.test(sum === MAX_SUPPLY && sumEv === MAX_SUPPLY, "320,000,000", () => `the chain's parts sum to ${usd(sum)}, the events' to ${usd(sumEv)}`);
   // what is claimable counts what has streamed and not yet settled; owed is what has been released (C9)
-  brk.test(B(sb.owed) === claimable - pendingNow, "owed", () => `owed ${usd(B(sb.owed))}; the covenants have ${usd(claimable)} claimable, ${usd(pendingNow)} of it not yet settled`);
-  observations.tr3 = {
-    minted: usd(B(sb.minted)), owed: usd(B(sb.owed)), relics: usd(B(sb.relics)), committed: usd(B(sb.committed)), unstreamed: usd(B(sb.unstreamed)),
-    unallocated: usd(B(sb.unallocated)), allocatedLive: usd(livePlaces), dustWei: String(dust), dropped: usd(droppedEv), capExcessDropped: usd(capExcess),
-  };
+  brk.test(B(sp.owed) === claimable - pendingNow, "owed", () => `owed ${usd(B(sp.owed))}; the covenants have ${usd(claimable)} claimable, ${usd(pendingNow)} of it not yet settled`);
+  observations.tr3 = Object.fromEntries(parts.map(([k, v]) => [k, usd(v)]));
   observations.editions = {
-    current: ed, lastOpened: edLast, closed: closesCount, finished: finishedEv,
-    droppedByCloses: usd(E("editions.EditionClosed").reduce((x, e) => x + B(e.a.dropped), 0n)),
-    reservations: E("editions.Reserved").length, released: E("editions.Released").length, promotions: moves,
-    settling: E("editions.EditionSettling").length, fixed: fixes, sold: E("editions.Sold").length, placed: E("editions.Placed").length,
+    open: ed, ladderFull, reservations: E("editions.Reserved").length, queued: E("editions.Queued").length,
+    bySignup: E("editions.Queued").filter((e) => e.a.bySignup).length, placed: E("editions.Placed").length,
+    straddled: E("editions.Placed").filter((e) => N(e.a.restEdition) !== 0).length, passedOver: E("editions.PassedOver").length,
+    released: E("editions.Released").length, sold: E("editions.Sold").length,
+    roomReturned: Object.fromEntries(["released", "earlyEnd", "endHold", "noWeight", "pairCap"].map((k, i) => [k, usd(E("editions.RoomReturned").filter((e) => N(e.a.source) === i).reduce((x, e) => x + B(e.a.amount), 0n))])),
+    placedLate: [...places.values()].filter((p) => p.stale).length,
     assignedByHolders: E("parties.VerifierAssigned").length, rejectionsFiled: E("parties.RequestRejected").length,
     rejected: E("registry.RequestEnded").filter((e) => N(e.a.reason) === 11).length,
-    placedInEdition: Object.fromEntries(Array.from({ length: Math.max(edLast, 1) }, (_, i) => [i + 1, String(edR[i + 1])]).filter(([, v]) => v !== "0")),
+    placedInEdition: Object.fromEntries(Array.from({ length: Math.max(ed, 1) }, (_, i) => [i + 1, usd(edPlaced[i + 1])]).filter(([, v]) => v !== "0")),
   };
 }
 
-// the Relics: the replayed ledger against EcoOvercharge, every Relic and the totals
+// the records, gems and stones: the replay against EcoOvercharge now
 {
-  const ids = [...relicL.keys()];
-  const [now_, tp, acc, uns, pool] = await Promise.all([Promise.all(ids.map((id) => rd("overcharge", "getRelic", [id]))),
-    rd("overcharge", "totalPoints"), rd("overcharge", "accPerPoint"), rd("overcharge", "unshared"), rd("overcharge", "pool")]);
-  ovc.test(B(tp) === tPoints && B(acc) === accPP && B(uns) === unsharedEv && B(pool) === poolEv, "the ledger",
-    () => `EcoOvercharge: ${usd(B(tp))} points, acc ${acc}, ${usd(B(uns))} unshared, ${usd(B(pool))} held; replayed ${usd(tPoints)}, ${accPP}, ${usd(unsharedEv)}, ${usd(poolEv)}`);
+  const [tw, di, pool, committed] = await Promise.all([rd("overcharge", "totalWeight"), rd("overcharge", "dropIndex"), rd("overcharge", "pool"), rd("overcharge", "committed")]);
+  recC.test(B(tw) === totalW && B(di) === dropIdx && B(pool) === poolEv, "the ledger",
+    () => `EcoOvercharge: weight ${usd(B(tw))}, index ${di}, ${usd(B(pool))} held; replayed ${usd(totalW)}, ${dropIdx}, ${usd(poolEv)}`);
+  stoneC.test(B(committed) === committedEv, "the ledger", () => `EcoOvercharge: ${usd(B(committed))} committed; replayed ${usd(committedEv)}`);
+  const lands = [...recs.keys()];
+  const [recNow, landNow] = await Promise.all([Promise.all(lands.map((tid) => rd("overcharge", "record", [tid]))), Promise.all(lands.map((tid) => rd("overcharge", "landOf", [tid])))]);
   let held = 0n;
-  ids.forEach((id, i) => {
-    const r = relicL.get(id)!, x = now_[i];
-    const bal = r.balance + (r.points * (accPP - r.accAt)) / WAD;
+  lands.forEach((tid, i) => {
+    const r = recs.get(tid)!, x = recNow[i], bal = r.balance + (r.weight * (dropIdx - r.index)) / INDEX;
     held += bal;
-    ovc.test(N(x.state) === r.state && N(x.edition) === r.edition && B(x.points) === r.points && B(x.balance) === bal, `Relic ${id}`,
-      () => `EcoOvercharge: state ${x.state}, edition ${x.edition}, ${usd(B(x.points))} points, ${usd(B(x.balance))}; replayed ${r.state}, ${r.edition}, ${usd(r.points)}, ${usd(bal)}`);
+    recC.test(N(x.state) === r.state && N(x.n) === r.n && N(x.releases) === r.releases && B(x.weight) === r.weight && B(x.allocation) === r.alloc
+      && B(x.balance) === bal && B(x.minted) === r.minted, R(tid),
+      () => `EcoOvercharge: state ${x.state}, releases ${x.releases}/${x.n}, weight ${usd(B(x.weight))}, A' ${usd(B(x.allocation))}, ${usd(B(x.balance))}, minted ${usd(B(x.minted))}; replayed ${r.state}, ${r.releases}/${r.n}, ${usd(r.weight)}, ${usd(r.alloc)}, ${usd(bal)}, ${usd(r.minted)}`);
+    const L_ = landsS.get(tid), y = landNow[i];
+    if (L_) stoneC.test(B(y.room) === L_.room && B(y.roomUsed) === L_.roomUsed && B(y.committed) === L_.committed && B(y.instalment) === L_.instalment
+      && B(y.left) === L_.left && B(y.carry) === L_.carry, R(tid),
+      () => `EcoOvercharge: room ${usd(B(y.room))}, used ${usd(B(y.roomUsed))}, committed ${usd(B(y.committed))}, instalment ${usd(B(y.instalment))}, left ${usd(B(y.left))}, carry ${usd(B(y.carry))}; replayed ${usd(L_.room)}, ${usd(L_.roomUsed)}, ${usd(L_.committed)}, ${usd(L_.instalment)}, ${usd(L_.left)}, ${usd(L_.carry)}`);
   });
-  ovc.test(held + unsharedEv <= poolEv, "the ledger", () => `the Relics hold ${usd(held)} and ${usd(unsharedEv)} waits, of ${usd(poolEv)}`);
-  observations.relics = {
-    born: ids.length, awake: ids.filter((id) => relicL.get(id)!.state === RS.AWAKE).length,
-    shattered: ids.filter((id) => relicL.get(id)!.state === RS.SHATTERED).length, forged: forgedInto.size,
-    overcharges: E("tree.BoostCommitted").length, committed: usd(E("tree.BoostCommitted").reduce((x, e) => x + B(e.a.commit), 0n)),
-    paid: usd(E("tree.BoostPaid").reduce((x, e) => x + B(e.a.amount), 0n)), carriedBack: usd(E("tree.BoostCarried").reduce((x, e) => x + B(e.a.amount), 0n)),
-    held: usd(poolEv),
+  // every stone in every land
+  const set = lands.flatMap((tid) => (landsS.get(tid)?.ids ?? []).map((id) => [tid, id] as const));
+  const stNow = await Promise.all(set.map(([tid, id]) => rd("overcharge", "stoneOf", [tid, id])));
+  set.forEach(([tid, id], i) => {
+    const s = landsS.get(tid)!.st.get(id)!, x = stNow[i];
+    stoneC.test(!!x.set && B(x.unpaid) === s.unpaid && B(x.instalment) === s.instalment, `${R(tid)}, gem ${id}`,
+      () => `EcoOvercharge: unpaid ${usd(B(x.unpaid))}, instalment ${usd(B(x.instalment))}; replayed ${usd(s.unpaid)}, ${usd(s.instalment)}`);
+  });
+  // what came back to the stones, transaction by transaction
+  for (const k of new Set([...carriedWant.keys(), ...carriedEv.keys()])) {
+    const want = carriedWant.get(k) ?? 0, got = carriedEv.get(k) ?? 0, [tx, id, amt] = k.split("|");
+    stoneC.test(want === got, `gem ${id}`, () => `${got} Carried of ${usd(BigInt(amt))} in ${tx.slice(0, 12)}; the replay gives ${want}`);
+  }
+  // every gem
+  const gids = [...gemsL.keys()];
+  const [gNow, oNow] = await Promise.all([Promise.all(gids.map((id) => rd("overcharge", "gem", [id]))),
+    Promise.all(gids.map((id) => rd("overcharge", "ownerOf", [id]).catch(() => Z)))]);
+  let gemTotal = 0n;
+  gids.forEach((id, i) => {
+    const g = gemsL.get(id)!, x = gNow[i];
+    gemTotal += g.balance;
+    gemC.test(N(x.edition) === (g.burned ? N(x.edition) : g.edition) && N(x.half) === (g.burned ? N(x.half) : g.half) && B(x.balance) === g.balance
+      && B(x.land) === (g.burned ? B(x.land) : g.land) && N(x.release) === (g.burned ? N(x.release) : g.release) && N(x.openLands) === g.open
+      && L(oNow[i]) === (g.burned ? Z : gemOwner.get(id) ?? Z), `gem ${id}`,
+      () => `EcoOvercharge: edition ${x.edition}, half ${x.half}, release ${x.release}, land ${x.land}, ${usd(B(x.balance))} carats, open in ${x.openLands}, owner ${short(oNow[i])}; replayed ${g.edition}, ${g.half}, ${g.release}, ${g.land}, ${usd(g.balance)}, ${g.open}, ${short(g.burned ? Z : gemOwner.get(id) ?? Z)}`);
+    gemC.test(g.balance <= CARAT_CAP, `gem ${id}`, () => `${usd(g.balance)} carats`);
+  });
+  // the records and gems hold all of the pool, but the index's dust
+  recC.test(held + gemTotal <= poolEv && poolEv - held - gemTotal <= BigInt(recs.size + E("overcharge.Drop").length + 2), "the ledger",
+    () => `the records hold ${usd(held)} and the gems ${usd(gemTotal)}, of ${usd(poolEv)} (dust ${poolEv - held - gemTotal} wei)`);
+  observations.records = {
+    records: recs.size, drops: E("overcharge.Drop").length, dropped: usd(droppedEv), paused: E("overcharge.RecordPaused").length,
+    shattered: E("overcharge.RecordShattered").length, pairs: E("overcharge.GemsReleased").filter((e) => B(e.a.amount) > 0n).length,
+    toGems: usd(E("overcharge.GemsReleased").reduce((x, e) => x + B(e.a.amount), 0n)),
+    pairExcessToRoom: usd(E("overcharge.GemsReleased").reduce((x, e) => x + B(e.a.toRoom), 0n)),
+  };
+  observations.gems = {
+    gems: gids.length, fused: E("overcharge.Transmuted").length, stonesSet: E("overcharge.Overcharged").length,
+    landsOvercharged: new Set(E("overcharge.Overcharged").map((e) => String(e.a.target))).size,
+    committed: usd(E("overcharge.Overcharged").reduce((x, e) => x + B(e.a.commitment), 0n)),
+    paid: usd(E("tree.OverchargeReleased").reduce((x, e) => x + B(e.a.amount), 0n)),
+    carriedBack: usd(E("overcharge.Carried").reduce((x, e) => x + B(e.a.amount), 0n)), released: releaseTx.size,
   };
 }
 
@@ -1991,7 +2193,7 @@ if (process.env.CONFIG) {
     const e = enabledEv.get(c.code);
     dep.test(!!e && N(e.settings.flowId) === c.flowId && N(e.settings.minTermYears) === c.minTerm && N(e.settings.maxTermYears) === c.maxTerm
       && N(e.settings.listingWindow) === c.listingDays * DAY && N(e.settings.postSaleWindow) === c.postSaleDays * DAY
-      && B(e.fees.baseFee) === BigInt(c.baseFee) * USD && B(e.fees.deskRate) === BigInt(c.deskRate) * USD
+      && B(e.fees.baseFee) === BigInt(c.baseFee) * USD
       && B(e.fees.powerFee) === BigInt(c.powerFee) * USD && B(e.fees.agreementFee) === BigInt(c.agreementFee) * USD
       && B(e.fees.registrationFixed) === BigInt(c.registrationFixed) * USD && B(e.fees.registrationPerHa) === BigInt(c.registrationPerHa) * USD,
       `${c.name} (${c.code})`, () => e ? `deployed ${JSON.stringify({ ...e.settings, ...e.fees }, (_, v) => typeof v === "bigint" ? v.toString() : v)}` : "not enabled");
@@ -2063,7 +2265,7 @@ const summary = {
   events: events.length,
   counts: Object.fromEntries(["VerificationRequested", "VerificationSubmitted", "CovenantMinted", "Activated", "CovenantVerified", "InstalmentsReleased",
     "ChallengeRaised", "ChallengeDetermined", "ChallengeLapsed", "ChallengeWithdrawn", "SeatVacated", "VerifierReplaced", "CovenantBlocked",
-    "CovenantCancelled", "CovenantClosedEarly", "SaleLapsed", "Sold", "RelicMinted", "BoostCommitted", "RewardClaimed", "EditionClosed",
+    "CovenantCancelled", "CovenantClosedEarly", "SaleLapsed", "Sold", "Placed", "PassedOver", "GemsReleased", "Overcharged", "Transmuted", "RecordPaused", "RewardClaimed", "EditionOpened",
     "ProposalExecuted", "CountryVoteExecuted", "EmergencyFreeze", "FeePaid", "FeesRefunded", "StaleSaleCancelled", "AccessionLapsed"].map((n) => [n, count(n)])),
   failedBy: Object.entries(failed.reduce((m, f) => { const k = `${f.to}.${f.fn}${f.expected ? " (expected)" : ""}`; m[k] = (m[k] ?? 0) + 1; return m; }, {} as Record<string, number>)),
   observations, configuration: { ...cfg, defaultBaseFee: usd(defaultV0), editionScale: N(editionScale) },

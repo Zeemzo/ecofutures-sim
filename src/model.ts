@@ -27,9 +27,9 @@ export const ChallengeState = { NONE: 0, OPEN: 1, RESPONDED: 2, SEATED: 3, DETER
 export const Option = { NONE: 0, W1A: 1, W1B: 2, T3A: 3, T3B: 4, T3C: 5, T3D: 6, T3E: 7 } as const;
 export const OptionName = ["", "1A: the score", "1B: the documents", "3A: the Deed off the register", "3B: the score, or a missed breach",
   "3C: natural damage", "3D: the landowner's breach", "3E: a wrong block"];
+/** A land's record (EcoOvercharge.RecordState, TR3 Model 4 §6). */
+export const RecordState = { NONE: 0, ASLEEP: 1, HELD: 2, PAUSED: 3, CLOSED: 4 } as const;
 /** Why instalments are held (Bank Account.holds bits). */
-/** EcoOvercharge.State: a Relic charges with its EFT, wakes at a completed End Date, or shatters (320M model). */
-export const RelicState = { NONE: 0, CHARGING: 1, AWAKE: 2, SHATTERED: 3, FORGED: 4 } as const;
 export const Holds = { BREACH: 1, VACANCY: 2, DEED: 4, HALT: 8, ACCESSION: 16, COUNCIL: 32, PARTITION: 64 } as const;
 export const Payee = ["attestor", "panel", "challenger", "guardian"];
 export const Action = {
@@ -37,7 +37,7 @@ export const Action = {
   SET_COUNTRY_STATUS: 7, REVOKE_POWER: 8, SWITCH_PAYEE: 9, REASSIGN_VERIFIER: 10, CLEAR_PARCEL: 11,
   UNBLOCK_COVENANT: 12, CANCEL_COVENANT: 13, NOMINATE_VERIFIER: 14, FREEZE_DRIP: 15, SUSPEND_VERIFIER: 16,
   DISMISS_VERIFIER: 17, END_REWARD: 18, EXTEND_CLOCK: 19, ACQUISITION: 20, CANCEL_ROOT: 21, RECORD_DOCUMENT: 22,
-  APPROVE_ROOT_OP: 23, SET_MIN_FIELD_RATE: 24, MOVE_HOLDER_SEAT: 25,
+  APPROVE_ROOT_OP: 23, SET_MIN_BASE_FEE: 24, MOVE_HOLDER_SEAT: 25,
 } as const;
 /** What a country vote decides: two blocs, the Council and the country's own Trust Admins, each by more than half (item 11). */
 export const Matter = { REPLACE_HOLDER: 0, SET_FEES: 1, APPLY_SETTINGS: 2 } as const;
@@ -100,7 +100,7 @@ export function shortDate(t: number): string {
 }
 
 export function hectares(landUnits: number): string {
-  return `${(landUnits / 100).toLocaleString("en-US", { maximumFractionDigits: 2 })} ha`;
+  return `${(landUnits / 10_000).toLocaleString("en-US", { maximumFractionDigits: 4 })} ha`;
 }
 
 export function span(seconds: number): string {

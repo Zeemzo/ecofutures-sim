@@ -5,9 +5,9 @@
 //   usdt, tr3      18 decimals: typed and shown in whole tokens ("1000", "192.5"; "1000 wei" for base units)
 //   time           unix seconds: typed "2027-03-01", "2027-03-01 12:00", "now", "now+7d", or seconds
 //   duration       seconds: typed "30d", "12h", "1y" (365 days), "1d12h", or seconds
-//   landUnits      hundredths of a hectare: typed "100" or "1 ha"
-//   landYears      hundredths of a hectare-year
-//   score 1-100, band 1-8, permille (70 = 7%), multiplierE18 (a Relic's M x 1e18: typed "x5" or "5x"), holds (bits)
+//   landUnits      square metres (TR3 Model 4 §2.8): typed "10000", "10000 m2" or "1 ha"
+//   landYears      square-metre-years
+//   score 1-100, band 1-8, permille (70 = 7%), multiplierE18 (a stone's M x 1e18: typed "x5" or "5x"), holds (bits)
 //   enum:<Name>    a uint8 shown and chosen by name
 import { formatUnits } from "viem";
 import units from "./units.json";
@@ -20,7 +20,7 @@ const U = units as unknown as Units;
 let chainNow = () => Math.floor(Date.now() / 1000);
 export function setChainNow(f: () => number) { chainNow = f; }
 
-const MONEY = /^(amount|addedValue|subtractedValue|value|baseFee|defaultBaseFee_|deskRate|powerFee|agreementFee|registrationFixed|registrationPerHa|registrationFee|registrationFees|cap|maxTotal|minCommit|minimum|perHectare|price|startPrice)$/;
+const MONEY = /^(amount|addedValue|subtractedValue|value|baseFee|defaultBaseFee_|powerFee|agreementFee|registrationFixed|registrationPerHa|registrationFee|registrationFees|cap|maxTotal|minCommit|minimum|perHectare|price|startPrice)$/;
 
 /** The kind of a parameter of `fn` on contract `c`, by its path ("name", or "struct.field"; outputs "returns.name"). */
 export function kindOf(c: string, fn: string, path: string, type = ""): Kind | undefined {
@@ -81,12 +81,14 @@ export function parseTyped(kind: Kind, raw: string): bigint | number {
   if (kind === "duration") return duration(v);
   if (kind === "landUnits" || kind === "landYears") {
     const ha = v.match(/^(\d+(?:\.\d+)?)\s*ha$/i);
-    if (ha) return Number(decimal(ha[1], 2));
-    if (!/^\d+$/.test(v)) throw new Error(`"${raw}" is not a land size (try 100 for 1 ha, or 1.5 ha)`);
+    if (ha) return Number(decimal(ha[1], 4));
+    const m2 = v.match(/^(\d+)\s*(?:m2|m²|sq\s*m)$/i);
+    if (m2) return Number(m2[1]);
+    if (!/^\d+$/.test(v)) throw new Error(`"${raw}" is not a land size (try 10000 or 10000 m2 for 1 ha, or 1.5 ha)`);
     return Number(v);
   }
   if (kind === "multiplierE18") {
-    // a Relic's M (the 320M model), x 1e18
+    // a stone's M (TR3 Model 4 §7), x 1e18
     const x = v.match(/^x\s*(\d+(?:\.\d+)?)$/i) ?? v.match(/^(\d+(?:\.\d+)?)\s*x$/i);
     if (x) return decimal(x[1], 18);
     if (!/^\d+$/.test(v)) throw new Error(`"${raw}" is not a multiplier (try x5, 5x, or the raw value)`);
@@ -118,8 +120,8 @@ export function formatValue(kind: Kind | undefined, v: unknown): string {
     const txt = [d && `${d}d`, h && `${h}h`, m && `${m}m`].filter(Boolean).join(" ") || `${s}s`;
     return `${txt} (${s.toLocaleString("en-US")} s)`;
   }
-  if (kind === "landUnits") return `${(Number(n) / 100).toLocaleString("en-US", { maximumFractionDigits: 2 })} ha (${n})`;
-  if (kind === "landYears") return `${(Number(n) / 100).toLocaleString("en-US", { maximumFractionDigits: 2 })} ha·yr (${n})`;
+  if (kind === "landUnits") return `${(Number(n) / 10_000).toLocaleString("en-US", { maximumFractionDigits: 4 })} ha (${Number(n).toLocaleString("en-US")} m²)`;
+  if (kind === "landYears") return `${(Number(n) / 10_000).toLocaleString("en-US", { maximumFractionDigits: 4 })} ha·yr (${Number(n).toLocaleString("en-US")} m²·yr)`;
   if (kind === "permille") return `${Number(n) / 10}% (${n}‰)`;
   if (kind === "multiplierE18") return n === 0n ? "none (0)" : `x${(Number(n) / 1e18).toLocaleString("en-US", { maximumFractionDigits: 4 })} (${n})`;
   if (kind === "holds") {
@@ -147,8 +149,8 @@ export function hintFor(kind: Kind | undefined): string | undefined {
     case "tr3": return "TR3: 1000 = 1,000 TR3 (1000 wei for base units)";
     case "time": return "a date: 2027-03-01, 2027-03-01 12:00, now, now+7d (UTC), or unix seconds";
     case "duration": return "30d, 12h, 1d12h, 1y, or seconds";
-    case "landUnits": return "hundredths of a hectare: 100 = 1 ha (or type 1 ha)";
-    case "landYears": return "hundredths of a hectare-year: 100 = 1 ha·yr";
+    case "landUnits": return "square metres: 10000 = 1 ha (or type 1 ha); the smallest plot is 100 m²";
+    case "landYears": return "square-metre-years: 10000 = 1 ha·yr";
     case "score": return "EcoScore 1–100";
     case "band": return "IUCN band 1–8";
     case "permille": return "per thousand: 70 = 7%";

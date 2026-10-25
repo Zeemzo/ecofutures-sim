@@ -53,11 +53,12 @@ await page.evaluate(() => document.querySelector('[data-extab="reads"]')?.click(
 await sleep(300);
 check(await open("quote(uint16,uint64,uint16,uint8)"), "EcoLens.quote is listed");
 const qf = 'details.fn[data-fn="quote(uint16,uint64,uint16,uint8)"] form';
-await type(qf, 0, "144"); await type(qf, 1, "100"); await type(qf, 2, "5"); await type(qf, 3, "100");
+await type(qf, 0, "144"); await type(qf, 1, "1 ha"); await type(qf, 2, "6"); await type(qf, 3, "100");
 await page.click(`${qf} button[type="submit"]`);
 await page.waitForFunction((qf) => /USDT|Reverted/.test(document.querySelector(`${qf} .out`)?.textContent ?? ""), { timeout: 20_000 }, qf);
 const out = await page.$eval(`${qf} .out`, (x) => x.textContent);
-check(/"upfront": "219 USDT"/.test(out) && /TR3/.test(out) && /"edition": 1/.test(out), "quote shown in USDT and TR3", out.replace(/\s+/g, " ").slice(0, 300));
+// 1 ha in Sri Lanka (TR3 Model 4 §11): fee 1 V x (1 + 1 + 1/30) = 61, V 30, (V / 10) x 2.5 = 7.5, the power 20, the covenant 30 + 2
+check(/"upfront": "150.5 USDT"/.test(out) && /TR3/.test(out) && /"edition": 1/.test(out), "quote shown in USDT and TR3", out.replace(/\s+/g, " ").slice(0, 300));
 
 // ---- Take over, Act freely: Guardian 1 requests with maxTotal 1000
 await page.click('[data-view="sim"]');
@@ -73,7 +74,7 @@ await page.select("#freeFn", "registry.requestVerification");
 await sleep(300);
 const ff = "#freeForm";
 check(await page.$eval("#freeWho", (s) => /Guardian/.test(s.selectedOptions[0]?.textContent ?? "")), "acting as the landowner");
-const vals = ["144", "100", "5", "forms smoke parcel", "0x0000000000000000000000000000000000000000", "1000", "forms-smoke"];
+const vals = ["144", "1 ha", "6", "forms smoke parcel", "0x0000000000000000000000000000000000000000", "1000", "forms-smoke"];
 for (let i = 0; i < vals.length; i++) await type(ff, i, vals[i], "data-farg");
 const before = await page.evaluate(() => window.sim.engine.requests.length);
 await page.click(`${ff} button[type="submit"]`);

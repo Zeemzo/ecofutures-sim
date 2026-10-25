@@ -14,11 +14,11 @@ type Group = { title: string; note?: string; fields: Field[] };
 const BEHAVIOUR: Group[] = [
   { title: "The run", fields: [
     { path: "behaviour.arrivalsPerYear", label: "Landowners a year", min: 0.1, max: 2000, step: 0.5 },
-    { path: "behaviour.fillLand", label: "Run until the programme closes (all 21 editions)", kind: "check" },
-    { path: "behaviour.landGrowsWithEditions", label: "Plots grow with the editions, up to the largest each allows (to fill all 21; real plots are far smaller)", kind: "check" },
+    { path: "behaviour.fillLand", label: "Run until Edition 32 fills (all 320,000,000 TR3 placed)", kind: "check" },
+    { path: "behaviour.landGrowsWithEditions", label: "Plots grow with the editions, up to the largest each allows (to fill all 32; real plots are far smaller)", kind: "check" },
     { path: "behaviour.arrivalYears", label: "Otherwise, years of arrivals", unit: "years", min: 0, max: 200 },
     { path: "behaviour.maxRequests", label: "At most this many requests (0 = no limit)", min: 0, max: 100000 },
-    { path: "behaviour.maxTermYears", label: "Longest term a landowner asks for", unit: "years", min: 3, max: 100 },
+    { path: "behaviour.maxTermYears", label: "Longest term a landowner asks for (3, 6 ... 99)", unit: "years", min: 3, max: 99, step: 3 },
     { path: "behaviour.governanceCalendar", label: "The governance calendar: a new Trust Admin, a freeze, a removal and replacement, a law change, a suspension, a fee change, a Council rotation", kind: "check" },
   ] },
   { title: "Before the mint", note: "Percent of requests. The rest go through normally.", fields: [
@@ -42,6 +42,7 @@ const BEHAVIOUR: Group[] = [
     { path: "behaviour.blockPermille", label: "A re-verification finds a breach and blocks", unit: "per 1,000", max: 1000 },
     { path: "behaviour.cancelOfBlockPct", label: "Of the blocks, end in cancellation", unit: "%" },
     { path: "behaviour.resalePct", label: "An EFT is resold, each year", unit: "%" },
+    { path: "behaviour.gemUsePct", label: "A gem owner uses its stones, each month: sets them into a new land it owns, or fuses them", unit: "%" },
     { path: "behaviour.claimDays", label: "Every holder claims its TR3, so it is minted, every (1: 24 hours; 0: at re-verifications only)", unit: "days", min: 0, step: 1 },
     { path: "behaviour.patronClaimPct", label: "Claims at re-verifications: the owner claims its waiting TR3 (else its pool passes to a buyer)", unit: "%" },
     { path: "behaviour.payeeSwitchPermille", label: "The land changes hands, each year", unit: "per 1,000", max: 1000 },
@@ -63,24 +64,23 @@ const CONTRACTS: Group[] = [
     { path: "contracts.haltAfter", label: "Unattested windows in a row that halt releases", min: 1, max: 100 },
   ] },
   { title: "Money", fields: [
-    { path: "contracts.baseFee", label: "V, the default base fee", unit: "USDT", min: 1 },
+    { path: "contracts.baseFee", label: "V, the one fee lever (also the Council's Vmin at launch)", unit: "USDT", min: 1 },
     { path: "contracts.verifierPermille", label: "Verifier's share of the sale", unit: "per 1,000", max: 999 },
     { path: "contracts.taxPermille", label: "Platform tax: server + Trust Admin + review pool", unit: "per 1,000", max: 999 },
     { path: "contracts.foundationPermille", label: "Of which the Foundation", unit: "per 1,000", max: 999 },
   ] },
-  { title: "TR3 editions", note: "An edition holds this many land-years (hundredths of a hectare × years) × F², and mints 10,000,000 TR3 across them: 100,000 in production, 1,000 hectare-years in edition 1. An edition not full eight protocol years after it opened closes anyway, burning what no land took. Smaller fills the editions sooner.", fields: [
+  { title: "TR3 editions", note: "An edition holds this many square-metre-years × F(min(k, 10)) × F(k), and gives its 10,000,000 TR3 to the land placed in it: 10,000,000 in production, 1,000 hectare-years in Edition 1. No edition closes on time: each closes by filling. Smaller fills the editions sooner.", fields: [
     { path: "contracts.editionScale", label: "Edition scale", min: 1 },
   ] },
 ];
 
 const COUNTRY_COLS: { key: keyof CountryConfig; label: string; w?: string; min?: number; max?: number }[] = [
   { key: "code", label: "ISO", w: "64px", min: 1, max: 999 }, { key: "name", label: "Name", w: "120px" }, { key: "short", label: "Code", w: "48px" },
-  { key: "flowId", label: "Flow", w: "170px" }, { key: "minTerm", label: "Min term", min: 3, max: 100 }, { key: "maxTerm", label: "Max term", min: 3, max: 100 },
+  { key: "flowId", label: "Flow", w: "170px" }, { key: "minTerm", label: "Min term", min: 3, max: 99 }, { key: "maxTerm", label: "Max term", min: 3, max: 99 },
   { key: "listingDays", label: "Listing days", min: 1 }, { key: "postSaleDays", label: "Post-sale days", min: 0 },
-  { key: "baseFee", label: "V (0 = default)", min: 0 }, { key: "deskRate", label: "D (0 = V × 4/50)", min: 0 },
+  { key: "baseFee", label: "V (0 = default; never below Vmin)", min: 0 },
   { key: "powerFee", label: "Fee 3: power", min: 0 }, { key: "agreementFee", label: "Fee 4: agreement", min: 0 },
   { key: "registrationFixed", label: "Fee 5: fixed", min: 0 }, { key: "registrationPerHa", label: "Fee 5 per ha", min: 0 },
-  { key: "fieldRate", label: "W: field cost per ha (0 = USD 7)", min: 0 },
   { key: "typicalHa", label: "Typical plot (ha)", min: 0.01 }, { key: "largestHa", label: "Largest plot (ha)", min: 0.01 },
   { key: "valuePerHaYear", label: "Value per ha a year", min: 0 },
   { key: "holders", label: "Trust Admins", min: 1, max: 9 }, { key: "orgsPerHolder", label: "Orgs each", min: 1, max: 9 },
@@ -207,8 +207,8 @@ export function mountSetup(root: HTMLElement, onStart: (c: Choice) => void, stat
       if (!code) return;
       const iso = ALL_COUNTRIES.find(([n]) => n === code);
       const [name, short] = KNOWN_COUNTRIES[code] ?? (iso ? [iso[2], iso[1]] : [`Country ${code}`, `C${code}`.slice(0, 3)]);
-      sc.countries.push({ code, name, short, flowId: 2, minTerm: 3, maxTerm: 100, listingDays: 358, postSaleDays: 0, baseFee: 0,
-        deskRate: 0, powerFee: 20, agreementFee: 20, registrationFixed: 30, registrationPerHa: 2, fieldRate: 0, typicalHa: 10, largestHa: 500, valuePerHaYear: 50, holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 20 });
+      sc.countries.push({ code, name, short, flowId: 2, minTerm: 3, maxTerm: 99, listingDays: 358, postSaleDays: 0, baseFee: 0,
+        powerFee: 20, agreementFee: 20, registrationFixed: 30, registrationPerHa: 2, typicalHa: 10, largestHa: 500, valuePerHaYear: 50, holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 20 });
       persist(); render();
       return;
     }

@@ -9,8 +9,8 @@ export type Entry = { t: number; rid: number; cat: Category; text: string; minor
 const usd = (v: bigint) => `${money(v)} USDT`;
 const tree = (v: bigint) => `${money(v)} TR3`;
 const n = (x: unknown) => Number(x);
-/** Land-years (hundredths of a hectare × years) as hectare-years. */
-const ha = (v: bigint) => (Number(v) / 100).toLocaleString("en-US", { maximumFractionDigits: 2 });
+/** Square-metre-years as hectare-years. */
+const ha = (v: bigint) => (Number(v) / 10_000).toLocaleString("en-US", { maximumFractionDigits: 2 });
 
 type Fmt = (a: Record<string, any>, r: string, L: Ledger) => [Category, string, boolean?] | null;
 
@@ -144,27 +144,28 @@ const FORMATS: Record<string, Fmt> = {
   "countries.SettingsApplied": (a) => ["governance",
     `${countryName(n(a.country))}'s settings change: terms ${n(a.settings.minTermYears)} to ${n(a.settings.maxTermYears)} years, for new requests.`],
 
-  // ---- editions, the Reserve and Relics ----
-  "editions.Reserved": (a, r) => ["term", `${r} signs up for ${ha(a.landYears)} ha-yr: it holds no room until its watchdog closes.`],
-  "editions.Placed": (a, r) => ["term", `${r}'s watchdog has closed: it takes its place, ${ha(a.landYears)} ha-yr in edition ${n(a.edition)}.`, true],
-  "editions.Moved": (a, r) => ["term", `Room free in edition ${n(a.to)} goes to the earliest unlisted land that fits: ${r} moves up from edition ${n(a.from)}, at the earlier edition's reward.`],
-  "editions.EditionSettling": (a) => ["alert", `Edition ${n(a.edition)} is full and settling: the next edition opens, and room released in it goes to unlisted land from the editions after it.`],
-  "editions.Fixed": (a, r) => ["term", `${r} is listed: its edition, ${n(a.edition)}, and its reward are fixed.`, true],
-  "editions.Sold": (a, r) => ["term", `${r} is sold in edition ${n(a.edition)}: ${tree(a.allocation)} over its term at an EcoScore of 100${a.excess > 0n ? `, the ${tree(a.excess)} above the per-land cap dropped to the Relics` : ""}.`, true],
-  "editions.Released": (a, r) => ["money", `${r} never became a covenant: its ${ha(a.landYears)} ha-yr in edition ${n(a.edition)} return to that edition.`, true],
+  // ---- editions, placing and room (TR3 Model 4 §3) ----
+  "editions.Reserved": (a, r) => ["term", `${r} signs up for ${ha(a.landYears)} ha-yr: it reserves nothing; its turn is set when it is verified.`, true],
+  "editions.Queued": (a, r) => ["term", `${r}'s turn is ${dateOf(n(a.turn))}: ${a.bySignup ? "81 days after its sign-up" : "its watchdog's close"}. It is placed in turn from then.`, true],
+  "editions.Placed": (a, r) => ["term", `${r} takes its place in edition ${n(a.edition)}: ${tree(a.allocation)}${n(a.restEdition) ? `, and the rest of its land in edition ${n(a.restEdition)}, ${tree(a.restAllocation)}` : ""} over its term at an EcoScore of 100, fixed for good. Its paper flow opens.`],
+  "editions.PassedOver": (a, r) => ["term", `${r} is over the open edition's title limit: it keeps its turn and waits for edition ${n(a.edition)}, the first that takes it.`],
+  "editions.Sold": (a, r) => ["term", `${r} activates in edition ${n(a.edition)}: its ${tree(a.allocation)} start to stream.`, true],
+  "editions.Released": (a, r) => ["money", n(a.edition) ? `${r} never became a covenant: its place is released, and its ${tree(a.allocation)} go back to the open edition's room.` : `${r} never became a covenant before its place.`, true],
+  "editions.RoomReturned": (a) => ["money", `${tree(a.amount)} go back to edition ${n(a.toEdition)}'s room: ${["a released place", "an early end's unstreamed allocation", "TR3 blocked at an End-Date hold not lifted", "a drop with no weight anywhere", "a gem pair's excess over the land's mint"][n(a.source)] ?? "returned"}.`, true],
+  "editions.EditionOpened": (a) => ["alert", `Edition ${n(a.edition)} opens: 10,000,000 TR3 of room for land, placed in turn.`],
+  "editions.LadderFull": () => ["alert", `Edition 32 is full: all 320,000,000 TR3 are placed. Sign-ups go on: verified land waits in turn, and room that comes back is placed at Edition 32's reward.`],
   "parties.RequestRejected": (a, r) => ["lifecycle", `${nameOf(a.verifier)} rejects ${r}: ${["", "the land is not found", "it has no valid title", "no access was given"][n(a.reason)] ?? "a rejection"}. A 1A challenge may overturn it in the watchdog.`],
-  "editions.EditionOpened": (a) => ["alert", `Edition ${n(a.edition)} opens, at step ${n(a.step)}: 10,000,000 new TR3 for land.`],
-  "editions.EditionClosed": (a) => ["alert", `Every place in edition ${n(a.edition)} has activated: it closes${a.dropped > 0n ? `, and the ${tree(a.dropped)} of its room never sold drop to the Relics` : ""}.`],
-  "editions.Finished": () => ["alert", `Edition 32 is full: all 320,000,000 TR3 are placed, and no land enters again. Covenants stream on to their End Dates.`],
   "tree.StreamReleased": (a, r) => ["money", `${r} releases ${tree(a.amount)} at an EcoScore of ${n(a.score)}.`, true],
-  "tree.Dropped": (a, r) => ["money", `${tree(a.amount)} drop to the Relics${BigInt(a.tokenId) === 0n ? "" : ` from ${r}`} (${["the score's shortfall", "a breach at the end", "an early end", "an edition's room never sold", "a land's TR3 above 1,000,000"][n(a.source)]}), shared by points.`, true],
-  "tree.BoostPaid": (a, r) => ["money", `${r} mints ${tree(a.amount)} of a Relic's overcharge with its stream.`, true],
-  "tree.BoostCarried": (a, r) => ["money", `${tree(a.amount)} of an overcharge ${r} did not mint carry back to the Relic that committed it.`, true],
-  "overcharge.RelicBorn": (a, r) => ["term", `${r}'s Relic is born, in edition ${n(a.edition)}: it charges with the EFT, earning points as the land releases TR3.`, true],
-  "overcharge.RelicWoke": (a, r) => ["term", `${r}'s Relic wakes for ${nameOf(a.owner)}: ${tree(a.balance)} to spend on land still streaming.`],
-  "overcharge.RelicShattered": (a, r) => ["alert", n(a.permille) === 1000 ? `${r}'s Relic shatters: its ${tree(a.balance)} go back to all Relics and its points lapse.` : `An acquired part shatters ${n(a.permille) / 10}% of ${r}'s Relic: ${tree(a.balance)} back to all Relics.`],
-  "overcharge.OverchargeCommitted": (a, r) => ["money", `A Relic overcharges ${r}: M = ${(Number(a.multiplierE18) / 1e18).toFixed(2)}, ${tree(a.commit)} committed from its balance, paid with the land's stream at its score.`],
-  "overcharge.Transmuted": (a) => ["money", `Two Relics are forged into one of edition ${n(a.edition)}: ${tree(a.balance)} and their points together.`],
+  "tree.OverchargeReleased": (a, r) => ["money", `${r}'s stones release ${tree(a.amount)} with its stream, at its score.`, true],
+  "tree.RewardEnded": (a, r) => [a.completed ? "term" : "alert", a.completed ? `${r}'s term is complete: its EFT expires, kept on chain and carrying nothing.` : `${r}'s TR3 ends before its term is complete${a.toRoom > 0n ? `: ${tree(a.toRoom)} not streamed go back to room` : ""}.`],
+  // ---- records and gems (TR3 Model 4 §5-8) ----
+  "overcharge.Drop": (a, r) => ["money", `${tree(a.amount)} drop from ${r}, shared at once among every record by weight.`, true],
+  "overcharge.RecordPaused": (_a, r) => ["alert", `${r}'s verification is overdue: its record is paused and weighs nothing until the verification is made.`],
+  "overcharge.RecordShattered": (a, r) => ["alert", `${r}'s record shatters${a.balance > 0n ? `: its ${tree(a.balance)} drop to the other records` : ""}.`],
+  "overcharge.PartlyAcquired": (a, r) => ["alert", `Part of ${r} is acquired: ${n(a.permille) / 10}% of its record, ${tree(a.shattered)}, drops to the records.`],
+  "overcharge.GemsReleased": (a, r) => ["money", a.amount > 0n ? `${r} pays gem pair ${n(a.release)}: ${tree(a.amount)} in two gems, Patron 1 : Guardian 1${a.toRoom > 0n ? `; ${tree(a.toRoom)} above the land's own mint go back to room` : ""}.` : `${r}'s record has nothing to pay at release ${n(a.release)}${a.toRoom > 0n ? `: ${tree(a.toRoom)} go back to room` : ""}.`],
+  "overcharge.Overcharged": (a, r) => ["money", `A gem is set into ${r}: M = ${(Number(a.multiplierE18) / 1e18).toFixed(2)}, ${tree(a.commitment)} committed, paid with the land's intervals from its first re-verification.`],
+  "overcharge.Transmuted": (a) => ["money", `${(a.ids as unknown[]).length} gems are fused into gem ${n(a.into)}.`],
 
   // ---- TR3, resale ----
   "tree.RewardClaimed": (a, r) => ["money", a.patronAmount > 0n

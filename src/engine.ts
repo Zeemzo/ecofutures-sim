@@ -2,10 +2,10 @@
 // local chain. Who the actors are, how often each thing happens and which governance the programme meets all
 // come from the run's scenario (config.ts). The rules they act under are V12's: the Covenant Flow Map v25.
 import { encodeAbiParameters, keccak256, maxUint256, zeroAddress, getAddress, type Address } from "viem";
-import { read, send, sendMany, labelAddress, fund, addr, bulk, abis, type Key, type Call } from "./chain";
+import { read, readBulk, send, sendMany, labelAddress, fund, addr, bulk, abis, type Key, type Call } from "./chain";
 import {
   DAY, YEAR, RequestStatus, Step, CovenantStatus, BlockReason, ChallengeState, Option, OptionName, Holds, Action,
-  Outcome, OutcomeName, Agreement, COMPLETED, Matter, register, nameOf, countryName, hectares, RelicState,
+  Outcome, OutcomeName, Agreement, COMPLETED, Matter, register, nameOf, countryName, hectares, RecordState,
 } from "./model";
 import type { Scenario, Behaviour, CountryConfig } from "./config";
 import { Control } from "./control";
@@ -78,8 +78,9 @@ export class Engine {
   foundation = getAddress("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
   server = labelAddress("server");
   emergency = labelAddress("emergency");
-  /** The backend's keeper: sends every call anyone may send once its time comes (settling, closing, sweeping, minting
-   *  a Relic). Its own wallet, so taking over the patrons never hands the person these calls. */
+  /** The backend's keeper: sends every call anyone may send once its time comes (placing land in turn, settling,
+   *  closing, sweeping, pausing an overdue land's record). Its own wallet, so taking over the patrons never hands the
+   *  person these calls. */
   keeper = labelAddress("keeper");
   feeWallet = labelAddress("foundationWallet");
   gtas: Address[] = [];
@@ -118,20 +119,26 @@ export class Engine {
   openChallenges: bigint[] = [];
   plan = new Map<bigint, number>();
   challengeOf = new Map<bigint, number>();
-  /** Awake Relics, for their owners to use: never burned, so kept after every use. */
-  relics: { id: bigint; owner: Address; edition: number }[] = [];
-  /** The next Relic id not yet looked at: every covenant's Relic is born at its activation and wakes at its End Date. */
-  /** Each block of a boosted EFT on which its owner has decided whether to end the boost (E6), by token and block. */
-  relicSeen = new Set<bigint>();
-  relicPass = 0;
-  queuePass = 0;
+  /** The gems (TR3 Model 4 §6.4, §8): the next id not yet looked at -- a pair is minted at a Loop Anchor every 3
+   *  years and at the End Date -- and the month's pass at which their owners use them. */
+  gemNext = 1n;
+  gemIds: bigint[] = [];
+  gemPass = 0;
+  /** Lands with stones set in them: their owner may end the overcharge during a hold (§7.5). */
+  stoned = new Set<bigint>();
+  /** Each verified land's turn (§3.1), until it is placed or ends: the keeper places in turn once one has come. */
+  turnOf = new Map<number, number>();
+  /** The keeper's placing: when it last ran, whether that placed anything, and the latest turn it had seen come. */
+  placeAt = 0;
+  placedLast = true;
+  turnSeen = 0;
+  /** The keeper's weekly look for overdue lands whose record weighs while they are late (§6.2). */
+  pausePass = 0;
   /** The next daily claim round (claimDays), and the covenants in it: request -> its EFT and its landowner. */
   claimPass = 0;
   inTerm = new Map<number, { tid: bigint; guardian: Address }>();
   /** An unclaimed request's assigner (R, 13 Oct, section 4): a Holder from day 30, or the Council from day 60. */
   assignBy = new Map<number, "holder" | "council">();
-  /** Each place's land-years: fixed at its sign-up, so read once. */
-  lyOf = new Map<bigint, bigint>();
 
   // the calendar
   nextArrival = 0;
@@ -147,9 +154,7 @@ export class Engine {
   private added: Address = zeroAddress;
   private suspended = 0;
 
-  reserveFinalized = false;
-
-  /** The last edition has begun: the land the editions schedule is taken, and arrivals stop. */
+  /** Edition 32 has filled: every TR3 of the ladder is placed, and arrivals stop (sign-ups would wait for returned room). */
   landFull = false;
   landFullAt = 0;
 
@@ -405,22 +410,22 @@ export class Engine {
     this.now = t;
     this.nextArrival = t + 2 * DAY;
     this.nextChallengePass = t;
-    this.relicPass = t + 30 * DAY;
+    this.gemPass = t + 30 * DAY;
+    this.pausePass = t + 7 * DAY;
     this.claimPass = t + DAY;
   }
 
   async tick(t: number): Promise<void> {
     this.now = t;
     this.volatile.clear();
-    // no edition closes on time (TR3 Model B item 10): the keeper places every land whose watchdog has closed, in order
-    if ((await read<readonly bigint[]>("editions", "queued")).length) await this.act(this.keeper, "editions", "placeDue", [], "placeDue");
+    // the keeper places, in turn, every land whose turn has come (TR3 Model 4 §3)
+    await this.placeTurns();
     const mean = YEAR / Math.max(0.1, this.b.arrivalsPerYear);
     while (!this.arrivalsOver() && t >= this.nextArrival) {
-      const open = N(await read("editions", "current"));
-      if (this.b.fillLand && (open === 0 || open > LAST_EDITION)) {
+      if (this.b.fillLand && (await read<boolean>("editions", "full"))) {
         this.landFull = true;
         this.landFullAt = t;
-        this.note("land-full", 0, `Edition ${LAST_EDITION} has filled: all 320,000,000 TR3 are placed, and no land enters again. The covenants already made run out their terms.`);
+        this.note("land-full", 0, `Edition ${LAST_EDITION} has filled: all 320,000,000 TR3 are placed. Arrivals stop here; land signed up now would wait for returned room. The covenants already made run out their terms.`);
         break;
       }
       await this.arrival();
@@ -434,19 +439,19 @@ export class Engine {
       await this.claimRound();
       this.claimPass = t + this.b.claimDays * DAY;
     }
-    if (t >= this.queuePass) {
-      await this.promoteQueue();
-      this.queuePass = t + DAY;
-    }
     this.preReq.clear();
     this.preTerm.clear();
     if (t >= this.nextChallengePass) {
       await this.challenges();
       this.nextChallengePass = t + DAY;
     }
-    if (t >= this.relicPass) {
-      await this.useRelics();
-      this.relicPass = t + 30 * DAY;
+    if (t >= this.pausePass) {
+      await this.pauseOverdue();
+      this.pausePass = t + 7 * DAY;
+    }
+    if (t >= this.gemPass) {
+      await this.useGems();
+      this.gemPass = t + 30 * DAY;
     }
 
   }
@@ -456,7 +461,10 @@ export class Engine {
     let m = this.arrivalsOver() ? Infinity : this.nextArrival;
     for (const rid of this.requests) if (!this.done.has(rid)) m = Math.min(m, this.nextAt.get(rid) ?? m);
     if (this.openChallenges.some((c) => c !== 0n)) m = Math.min(m, this.nextChallengePass);
-    if (this.relics.length) m = Math.min(m, this.relicPass);
+    if (this.gemNext > 1n) m = Math.min(m, this.gemPass);
+    if (this.inTerm.size) m = Math.min(m, this.pausePass);
+    // the next turn to come, for the keeper's placing
+    for (const turn of this.turnOf.values()) if (turn > this.now) m = Math.min(m, turn + 1);
     if (this.b.claimDays > 0 && this.inTerm.size) m = Math.min(m, this.claimPass);
     if (this.b.governanceCalendar) m = Math.min(m, this.start + (this.govStage + 1) * this.calendarYear());
     for (const x of [this.emergencyEndAt, this.unfreezeAt, this.feeSplitAt]) if (x) m = Math.min(m, x);
@@ -475,18 +483,15 @@ export class Engine {
       this.note("refused", 0, `A landowner in ${countryName(country)} is turned away: the country is suspended.`);
       return 0;
     }
-    // sign-ups never close (item 15): in a gap the land is checked against the next edition's limits
-    let cur = N(await read("editions", "current"));
-    if (cur === 0) cur = N(await read("editions", "last")) + 1;
+    // sign-ups never close (Model 4 §3.9); areas are in square metres (§2.8)
+    const cur = N(await read("editions", "current"));
     const minLand = N(await read("editions", "minLandUnits"));
-    // the largest title any edition takes; plots that "grow with the editions" stay within the open edition's limit
-    // and, at the small edition scales those runs use, within an eighth of its room: about the per-land cap's share
-    // (1,000,000 of an edition's 10,000,000 TR3). A land larger than an edition's capacity would pass through empty
-    // editions, each settling and starting its clock -- which production's sizes never allow (capacity 100,000 x F^2
-    // is never below the limit 10,000 x F)
+    // the largest title the open edition takes; plots that "grow with the editions" stay within its limit and, at the
+    // small edition scales those runs use, within an eighth of its capacity: about the land cap's share (1,000,000 of an
+    // edition's 10,000,000 TR3)
     const capNow = this.b.landGrowsWithEditions ? Math.max(1, Math.floor(N(await read("editions", "capacityOf", [cur])) / 8)) : 0;
     const maxLand = this.b.landGrowsWithEditions
-      ? Math.max(1, Math.floor(Math.min(N(await read("editions", "limitOf", [cur])), capNow) / 3))
+      ? Math.max(minLand, Math.floor(Math.min(N(await read("editions", "limitOf", [cur])), capNow) / 3))
       : N(await read("editions", "maxLandUnits"));
     let land: number;
     if (this.b.landGrowsWithEditions) land = minLand + Math.floor(((maxLand - minLand) * this.rand(1000) ** 2) / 1_000_000);
@@ -496,26 +501,29 @@ export class Engine {
       const k = this.countryConfig(country);
       const sigma = Math.log(Math.max(k.largestHa / k.typicalHa, 1.0001)) / 2.326;
       const ha = Math.min(k.largestHa, Math.max(k.typicalHa / 10, k.typicalHa * Math.exp(sigma * this.normal())));
-      land = Math.min(maxLand, Math.max(minLand, Math.round(ha * 100)));
+      land = Math.min(maxLand, Math.max(minLand, Math.round(ha * 10_000)));
     }
+    // terms are 3, 6 ... 99 years (Model 4 §2.8): the range comes in steps of 3, and so does the longest asked for
+    const longest = Math.max(3, this.b.maxTermYears - (this.b.maxTermYears % 3));
     let [lo, hi] = (await read<[number, number]>("countries", "termRange", [country, BigInt(land)])).map(N);
-    hi = Math.min(hi, Math.max(lo, this.b.maxTermYears));
+    hi = Math.min(hi, Math.max(lo, longest));
     // no term the country allows fits the plot under the edition's limit (100 x F ha-yr): the landowner offers the
     // largest part of it that one does -- the country's shortest term on as much land as the limit allows
     for (let i = 0; lo > hi && i < 24 && land > minLand; i++) {
       land = Math.max(minLand, Math.floor(land * 0.8));
       [lo, hi] = (await read<[number, number]>("countries", "termRange", [country, BigInt(land)])).map(N);
-      hi = Math.min(hi, Math.max(lo, this.b.maxTermYears));
+      hi = Math.min(hi, Math.max(lo, longest));
     }
     if (lo > hi) {
       this.note("refused", 0, `A landowner in ${countryName(country)} is turned away: no term the country allows fits land the edition allows.`);
       return 0;
     }
-    let term = lo + this.rand(hi - lo + 1);
-    if (capNow && land * term > capNow) term = Math.max(lo, Math.floor(capNow / land));
-    // its place is in the OPEN edition, within that edition's limit (R, 13 Oct, section 3)
+    let term = lo + 3 * this.rand(Math.floor((hi - lo) / 3) + 1);
+    if (capNow && land * term > capNow) term = Math.max(lo, Math.floor(capNow / land / 3) * 3);
+    // a land over the open edition's title limit is taken, and waits for the first edition that takes it; over Edition
+    // 32's it is refused (Model 4 §2.5, §3.2)
     if (N(await read("editions", "wouldReserve", [BigInt(land), term])) === 0) {
-      this.note("refused", 0, `A landowner in ${countryName(country)} is turned away: ${hectares(land)} for ${term} years is over the open edition's limit.`);
+      this.note("refused", 0, `A landowner in ${countryName(country)} is turned away: ${hectares(land)} for ${term} years is over Edition 32's title limit.`);
       return 0;
     }
     // the six upfront fees: fees 3-5 only where the country's flow has their step (TR3 Model B item 16)
@@ -653,8 +661,8 @@ export class Engine {
         return;
       }
       const score = 40 + this.rand(56);
-      await this.act(r.verifier, "registry", "submitVerification",
-        [BigInt(rid), score, 2 + this.rand(5), 1 + this.rand(3), h("title", rid), h("folios", rid), this.metadataOf(rid)], "submit", rid);
+      if (await this.act(r.verifier, "registry", "submitVerification",
+        [BigInt(rid), score, 2 + this.rand(5), 1 + this.rand(3), h("title", rid), h("folios", rid), this.metadataOf(rid)], "submit", rid)) await this.noteTurn(rid);
       this.nextAt.set(rid, t + DAY);
       return;
     }
@@ -713,6 +721,8 @@ export class Engine {
 
   async flow(rid: number, r: any, t: number): Promise<void> {
     const s = await read("registry", "stepContext", [BigInt(rid)]);
+    // the paper flow opens at placement (TR3 Model 4 §3.1): until then the request reads as VERIFIED
+    if (N(s.status) === RequestStatus.VERIFIED) { await this.awaitPlace(rid, r, t); return; }
     const holder: Address = await this.q("admin", "holderOf", [r.verifier]);
     const holderCan = await this.holderCan(holder);
     const term = N(r.termYears);
@@ -868,7 +878,7 @@ export class Engine {
   async startPrice(country: number, land: bigint, term: number): Promise<bigint> {
     const q = await read("lens", "quote", [country, land, term, 50]);
     const k = this.countryConfig(country);
-    const worth = BigInt(Math.round((Number(land) / 100) * term * k.valuePerHaYear * ((70 + this.rand(81)) / 100) * 1e6)) * 10n ** 12n;
+    const worth = BigInt(Math.round((Number(land) / 10_000) * term * k.valuePerHaYear * ((70 + this.rand(81)) / 100) * 1e6)) * 10n ** 12n;
     return worth > q.priceFloor ? worth : q.priceFloor + (q.priceFloor * BigInt(this.rand(50))) / 100n;
   }
 
@@ -935,12 +945,6 @@ export class Engine {
     if (t + length > N(deadline) || listed >= 3) { this.nextAt.set(rid, closeAt + 1); return; }
     const c = await read("core", "getCovenant", [tid]);
     if (N(c.status) !== CovenantStatus.MINTED) { this.nextAt.set(rid, t + 7 * DAY); return; }
-    // the 320M model: once Edition 32 is full a land with no place can never be listed; it closes unsold
-    if (N((await read("editions", "reservationOf", [BigInt(rid)])).edition) === 0 && (await read<boolean>("editions", "finished"))) {
-      this.note("edition", rid, `Edition 32 is full: #${rid} never takes a place, and closes unsold when its listing window ends.`);
-      this.nextAt.set(rid, closeAt + 1);
-      return;
-    }
     const start = await this.startPrice(N(c.country), c.landUnits, N(c.termYears));
     if (await this.act(c.guardian, "market", "listForAuction", [tid, start, 0n, BigInt(length)], "list", rid)) {
       this.listings.set(rid, listed + 1);
@@ -1141,7 +1145,7 @@ export class Engine {
     this.nextAt.set(rid, t + DAY + this.rand(5) * DAY);
   }
 
-  /** After the End Date: the review pool, the last TR3, and the Relic. */
+  /** After the End Date: the review pool and the last TR3 (the record's last gem pair is made at closeTerm). */
   async afterEnd(rid: number, tid: bigint, st: any) {
     const t = this.now;
     const w = st.w;
@@ -1150,59 +1154,160 @@ export class Engine {
       if (!(await this.act(this.keeper, "challenge", "sweepReviewPool", [tid], "sweep", rid))) { this.nextAt.set(rid, t + 7 * DAY); return; }
     }
     await this.claimTR3(rid, tid, true); // the End Date: the last owner takes its pool
-    // the 320M model: the Relic born at activation woke at a completed End Date, or shattered
-    const relicId = await read<bigint>("overcharge", "relicOf", [tid]);
-    if (relicId !== 0n && !this.relicSeen.has(relicId)) {
-      this.relicSeen.add(relicId);
-      const relic = await read("overcharge", "getRelic", [relicId]);
-      if (N(relic.state) === RelicState.AWAKE) {
-        const owner = getAddress(await read<Address>("overcharge", "ownerOf", [relicId]));
-        this.relics.push({ id: relicId, owner, edition: N(relic.edition) });
-        this.note("relic", rid, `#${rid}'s Relic wakes for ${nameOf(owner)}: edition ${N(relic.edition)}, ${tr3(relic.balance)} TR3 to spend, ${tr3(relic.points)} points.`);
-      } else if (N(relic.state) === RelicState.SHATTERED) {
-        this.note("relic", rid, `#${rid}'s Relic shatters: its balance goes back to all Relics and its points lapse.`);
-      }
-    }
+    this.stoned.delete(tid);
     this.note("complete", rid, `#${rid} is complete: every instalment released, the review pool settled.`);
     this.done.add(rid);
   }
 
-  /** Owners of awake Relics overcharge an EFT they own whose land still streams, where it commits the most, at the
-   *  quote's commit less 5%; what the land does not mint carries back to the Relic, which is never burned (the 320M
-   *  model). Two of the same edition (2 or later) are sometimes forged into one an edition lower, adding their points
-   *  and balances. */
-  async useRelics() {
-    const keep: { id: bigint; owner: Address; edition: number }[] = [];
-    for (const r of this.relics) {
-      if (!this.chance(this.b.relicUsePct)) { keep.push(r); continue; }
-      const twin = keep.find((x) => x.owner === r.owner && x.edition === r.edition && r.edition >= 2);
-      if (twin && this.rand(3) === 0) {
-        if (await this.act(r.owner, "overcharge", "transmute", [twin.id, r.id], "transmute")) {
-          twin.edition = r.edition - 1; // twin survives, an edition lower
-          this.note("relic", 0, `${nameOf(r.owner)} forges two edition-${r.edition} Relics into one of edition ${r.edition - 1}: their points and balances add.`);
-          continue;
+  /** A land's turn, read once its first verification has set it (TR3 Model 4 §3.1): the keeper places it from then. */
+  async noteTurn(rid: number) {
+    const res = await read("editions", "reservationOf", [BigInt(rid)]);
+    if (N(res.stream) !== 0 && N(res.edition) === 0 && !res.released) this.turnOf.set(rid, N(res.turn));
+  }
+
+  /**
+   * The keeper places land in turn (TR3 Model 4 §3; EcoEditions.placeDue, which anyone may call): once a turn it knows
+   * of has come and its land is not yet placed. A call that placed nothing is not repeated until a new turn comes, or a
+   * month on -- land passed over by the title limit, or waiting after Edition 32, is placed as room comes back, and
+   * every listing places a batch too (EcoEditions.fix).
+   */
+  async placeTurns() {
+    for (let round = 0; round < 10; round++) {
+      let newest = 0;
+      for (const turn of this.turnOf.values()) if (turn <= this.now && turn > newest) newest = turn;
+      if (newest === 0) return;
+      const fresh = newest > this.turnSeen;
+      if (round === 0 && !fresh && this.now < this.placeAt + (this.placedLast ? DAY : 30 * DAY)) return;
+      this.turnSeen = Math.max(this.turnSeen, newest);
+      this.placeAt = this.now;
+      await this.act(this.keeper, "editions", "placeDue", [], "placeDue");
+      const ids = [...this.turnOf.entries()].filter(([, turn]) => turn <= this.now).map(([rid]) => rid);
+      const rs = await Promise.all(ids.map((rid) => readBulk("editions", "reservationOf", [BigInt(rid)])));
+      let placed = 0;
+      ids.forEach((rid, i) => { if (N(rs[i].edition) !== 0 || rs[i].released) { this.turnOf.delete(rid); placed++; } });
+      this.placedLast = placed > 0;
+      // a batch is 24 steps: while it places land and more turns have come, it runs again
+      if (placed === 0 || placed === ids.length) return;
+    }
+  }
+
+  /** A verified request waits for its place; once placed more than a protocol year after its verification, its
+   *  verifier re-verifies it, title and score, before the flow opens: a new watchdog runs, and its place is kept (§3.1). */
+  private async awaitPlace(rid: number, r: any, t: number) {
+    const res = await read("editions", "reservationOf", [BigInt(rid)]);
+    if (N(res.edition) === 0) {
+      if (!this.turnOf.has(rid) && N(res.stream) !== 0 && !res.released) this.turnOf.set(rid, N(res.turn));
+      const turn = this.turnOf.get(rid) ?? 0;
+      // a land whose turn has come waits for room (passed over, or after Edition 32): looked at again weekly
+      this.nextAt.set(rid, turn > t ? turn + 3600 : t + 7 * DAY);
+      return;
+    }
+    const score = 40 + this.rand(56);
+    if (await this.act(r.verifier, "registry", "submitVerification",
+      [BigInt(rid), score, 2 + this.rand(5), 1 + this.rand(3), h("title again", rid), h("folios again", rid), this.metadataOf(rid)], "re-verify after the wait", rid)) {
+      this.note("placed-late", rid, `#${rid} was placed more than a year after its verification: ${nameOf(r.verifier)} re-verifies its title and score (${score}) before its paper flow opens. A new watchdog runs; its place is kept.`);
+    }
+    this.nextAt.set(rid, t + this.watchdog + DAY);
+  }
+
+  /** The keeper pauses the record of a land whose verification is overdue (§6.2): it weighs nothing until that
+   *  verification is made. Anyone may; the backend's keeper looks weekly. */
+  async pauseOverdue() {
+    const live = [...this.inTerm.entries()].filter(([rid]) => !this.done.has(rid));
+    // one batched wave: hundreds of single requests at once overwhelm the node
+    const st = await Promise.all(live.map(([, x]) => Promise.all([
+      readBulk<boolean>("parties", "isVerificationOverdue", [x.tid]), readBulk("overcharge", "record", [x.tid]),
+    ])));
+    for (let i = 0; i < live.length; i++) {
+      const [overdue, rec] = st[i];
+      if (!overdue || N(rec.state) !== RecordState.ASLEEP) continue;
+      const [rid, x] = live[i];
+      if (await this.act(this.keeper, "overcharge", "pause", [x.tid], "pause", rid)) {
+        this.note("record", rid, `#${rid}'s verification is overdue: the keeper pauses its record, which weighs nothing -- takes no share of the drops -- until the verification is made.`);
+      }
+    }
+  }
+
+  /**
+   * The gems (§6.4, §7, §8). Every pair minted since the last look is found by id. Each month an owner, now and then,
+   * sets its stones into a new land it owns -- activated, in its first interval, under no hold -- committing what the
+   * quote gives less 5%, at most the sockets left; otherwise it sometimes fuses two or more of one edition, none set in
+   * land with anything unpaid, within 1,000,000 carats. During a hold, the owner of a land with stones in it now and
+   * then ends the overcharge, and every stone gets back what it has not been paid.
+   */
+  async useGems() {
+    const next = await read<bigint>("overcharge", "nextGemId");
+    for (; this.gemNext < next; this.gemNext++) this.gemIds.push(this.gemNext);
+    if (!this.gemIds.length) return;
+    const ids0 = this.gemIds;
+    const ownerOf = await Promise.all(ids0.map((id) => readBulk<Address>("overcharge", "ownerOf", [id]).catch(() => null)));
+    const gems = await Promise.all(ids0.map((id, i) => (ownerOf[i] ? readBulk("overcharge", "gem", [id]) : null)));
+    this.gemIds = ids0.filter((_, i) => ownerOf[i] !== null); // a gem fused into another is burned
+    const byOwner = new Map<Address, { id: bigint; edition: number; balance: bigint; open: number }[]>();
+    ids0.forEach((id, i) => {
+      const g: any = gems[i];
+      if (!g || BigInt(g.balance) === 0n) return;
+      const owner = getAddress(ownerOf[i]!);
+      (byOwner.get(owner) ?? byOwner.set(owner, []).get(owner)!).push({ id, edition: N(g.edition), balance: BigInt(g.balance), open: N(g.openLands) });
+    });
+    // the new lands, by owner: activated, before their first re-verification, a day's margin inside the first interval
+    const fresh = new Map<Address, { rid: number; tid: bigint }[]>();
+    const live = [...this.inTerm.entries()].filter(([rid]) => !this.done.has(rid));
+    const looks = await Promise.all(live.map(([, x]) => Promise.all([readBulk("core", "getCovenant", [x.tid]), readBulk("bank", "getAccount", [x.tid])])));
+    const stops = Holds.BREACH | Holds.DEED | Holds.PARTITION | Holds.VACANCY;
+    const held: { rid: number; tid: bigint }[] = [];
+    for (let i = 0; i < live.length; i++) {
+      const [c, a] = looks[i], [rid, x] = live[i];
+      if (N(a.holds) & stops) { if (this.stoned.has(x.tid)) held.push({ rid, tid: x.tid }); continue; }
+      if (N(c.status) !== CovenantStatus.ACTIVE || N(c.verifiedThrough) !== 0 || this.now + DAY >= N(c.termStart) + N(a.interval)) continue;
+      const owner = getAddress(await read<Address>("token", "ownerOf", [x.tid]));
+      (fresh.get(owner) ?? fresh.set(owner, []).get(owner)!).push({ rid, tid: x.tid });
+    }
+    for (const [owner, mine] of byOwner) {
+      if (!this.chance(this.b.gemUsePct)) continue;
+      const lands = fresh.get(owner) ?? [];
+      let set = false;
+      for (const land of lands) {
+        const left = 21 - (await read<readonly bigint[]>("overcharge", "stoneIds", [land.tid])).length;
+        const ids = mine.map((g) => g.id);
+        const [, commits] = await read<[readonly bigint[], readonly bigint[]]>("lists", "quote", [land.tid, ids]);
+        // the quote takes the stones earliest edition first: keep those that commit, within the sockets left
+        const use = ids.map((id, i) => ({ id, c: commits[i], e: mine[i].edition })).filter((x) => x.c > 0n)
+          .sort((a, b) => a.e - b.e || (a.id < b.id ? -1 : 1)).slice(0, Math.max(0, left));
+        const total = use.reduce((x, y) => x + y.c, 0n);
+        if (total < 10n ** 18n) continue;
+        if (await this.act(owner, "overcharge", "setStones", [land.tid, use.map((x) => x.id), (total * 95n) / 100n], "setStones", land.rid)) {
+          this.stoned.add(land.tid);
+          this.note("overcharge", land.rid, `${nameOf(owner)} sets ${use.length} gem${use.length === 1 ? "" : "s"} into #${land.rid}, a new land it owns: ${tr3(total)} TR3 committed, paid with the land's intervals from its first re-verification, at its score.`);
+          set = true;
+          break;
         }
       }
-      let best: { rid: number; tid: bigint; mult: bigint; commit: bigint } | null = null;
-      for (const rid of this.requests) {
-        if (this.done.has(rid)) continue;
-        const req = await read("registry", "getRequest", [BigInt(rid)]);
-        if (N(req.status) !== RequestStatus.ENDED || N(req.endReason) !== COMPLETED) continue;
-        const tid: bigint = req.tokenId;
-        const c = await read("core", "getCovenant", [tid]);
-        if (N(c.status) !== CovenantStatus.ACTIVE || this.now + DAY >= N(c.termEnd)) continue; // a day's margin
-        if (getAddress(await read<Address>("token", "ownerOf", [tid])) !== r.owner) continue;
-        const [mult, , , commit] = await read<[bigint, bigint, bigint, bigint]>("overcharge", "quoteOvercharge", [tid, r.id]);
-        if (mult === 0n || commit < 10n ** 18n) continue; // land still streaming, room for at least 1 TR3
-        if (!best || commit > best.commit) best = { rid, tid, mult, commit };
+      if (set || this.rand(3) !== 0) continue;
+      // fuse: two or more of one edition, none set in land with anything unpaid, within 1,000,000 carats
+      const byEdition = new Map<number, typeof mine>();
+      for (const g of mine) if (g.open === 0) (byEdition.get(g.edition) ?? byEdition.set(g.edition, []).get(g.edition)!).push(g);
+      for (const [edition, gs] of byEdition) {
+        if (gs.length < 2) continue;
+        const pick: typeof gs = [];
+        let sum = 0n;
+        for (const g of gs.sort((a, b) => (a.id < b.id ? -1 : 1))) if (sum + g.balance <= 1_000_000n * 10n ** 18n) { pick.push(g); sum += g.balance; }
+        if (pick.length < 2) continue;
+        if (await this.act(owner, "overcharge", "transmute", [pick.map((g) => g.id)], "transmute")) {
+          this.note("gems", 0, `${nameOf(owner)} fuses ${pick.length} edition-${edition} gems into one of ${tr3(sum)} carats.`);
+        }
+        break;
       }
-      if (best && await this.act(r.owner, "overcharge", "overcharge", [best.tid, r.id, (best.commit * 95n) / 100n], "overcharge", best.rid)) {
-        const M = Number(best.mult) / 1e18;
-        this.note("overcharge", best.rid, `${nameOf(r.owner)} overcharges #${best.rid} with its edition-${r.edition} Relic: M = ${M.toFixed(2)}, ${tr3(best.commit)} TR3 committed from the Relic, paid with the land's stream at its score; what it does not mint carries back.`);
-      }
-      keep.push(r);
     }
-    this.relics = keep;
+    // during a hold, the owner of a land with stones sometimes ends the overcharge (§7.5)
+    for (const land of held) {
+      if (this.rand(2) !== 0) continue;
+      const owner = getAddress(await read<Address>("token", "ownerOf", [land.tid]));
+      if (await this.act(owner, "overcharge", "releaseOvercharge", [land.tid], "releaseOvercharge", land.rid)) {
+        this.stoned.delete(land.tid);
+        this.note("overcharge", land.rid, `#${land.rid} is under a hold: ${nameOf(owner)} ends its overcharge, and every stone set in it gets back what it has not been paid.`);
+      }
+    }
   }
 
   // What each due request's first look reads, fetched for all of them at once at the start of a tick.
@@ -1510,12 +1615,12 @@ export class Engine {
       this.note("gov", 0, `Counsel's note on ${c.name}'s stamp duty is in: the GTAs and ${c.name}'s Trust Admins vote its registration fees, for new requests: USD ${c.powerFee} for the power, USD ${c.agreementFee} for an agreement, and USD ${c.registrationFixed} plus USD ${perHa} a hectare for the covenant.`);
       const E = 10n ** 18n;
       const fees = {
-        baseFee: BigInt(c.baseFee) * E, deskRate: BigInt(c.deskRate) * E, powerFee: BigInt(c.powerFee) * E, agreementFee: BigInt(c.agreementFee) * E,
-        registrationFixed: BigInt(c.registrationFixed) * E, registrationPerHa: BigInt(perHa) * E, fieldRate: BigInt(c.fieldRate ?? 0) * E,
+        baseFee: BigInt(c.baseFee) * E, powerFee: BigInt(c.powerFee) * E, agreementFee: BigInt(c.agreementFee) * E,
+        registrationFixed: BigInt(c.registrationFixed) * E, registrationPerHa: BigInt(perHa) * E,
       };
       const payload = encodeAbiParameters([{ type: "uint16" }, { type: "tuple", components: [
-        { name: "baseFee", type: "uint96" }, { name: "deskRate", type: "uint96" }, { name: "powerFee", type: "uint96" }, { name: "agreementFee", type: "uint96" },
-        { name: "registrationFixed", type: "uint96" }, { name: "registrationPerHa", type: "uint96" }, { name: "fieldRate", type: "uint96" }] }], [c.code, fees]);
+        { name: "baseFee", type: "uint96" }, { name: "powerFee", type: "uint96" }, { name: "agreementFee", type: "uint96" },
+        { name: "registrationFixed", type: "uint96" }, { name: "registrationPerHa", type: "uint96" }] }], [c.code, fees]);
       if (await this.countryVote(Matter.SET_FEES, c.code, payload, `set ${c.name}'s fees`)) c.registrationPerHa = perHa;
     } else if (y === 4) {
       const target = tas(second)[1] ?? tas(second)[0];
@@ -1622,48 +1727,6 @@ export class Engine {
     const hs = this.countryHolders.get(country) ?? [];
     const ok = await Promise.all(hs.map((h) => this.holderCan(h)));
     return hs.find((_, i) => ok[i]) ?? zeroAddress;
-  }
-
-  /**
-   * The queue's housekeeping, as the portal does it (R, 13 Oct, section 3.3): free room in an edition below the OPEN one
-   * -- SETTLING, so its room serves promotions only -- goes to the earliest waiting request in a higher edition that
-   * fits its room and limit (promote, which the contract checks); the room that leaves frees in turn. Anyone may call
-   * it; the server does.
-   */
-  async promoteQueue(): Promise<void> {
-    const open = N(await read("editions", "current"));
-    const top = open === 0 ? N(await read("editions", "last")) : open;
-    if (top <= 1) return;
-    const eds = await Promise.all(Array.from({ length: top - 1 }, (_, i) => read("editions", "editionOf", [i + 1])));
-    // SETTLING (2) with room; an OPEN edition below the top cannot be
-    if (!eds.some((E: any) => N(E.state) === 2 && BigInt(E.capacity) > BigInt(E.placed))) return;
-    const waiting = new Map<number, { id: bigint; ly: bigint; seq: bigint }[]>();
-    for (let k = 2; k <= top; k++) {
-      const ids = await read<readonly bigint[]>("editions", "waitingIn", [k]);
-      const list: { id: bigint; ly: bigint; seq: bigint }[] = [];
-      for (const id of ids) {
-        const r = await read("editions", "reservationOf", [id]);
-        list.push({ id, ly: BigInt(r.landYears), seq: BigInt(r.seq) });
-      }
-      waiting.set(k, list);
-    }
-    for (let e = 1; e < top; e++) {
-      for (let guard = 0; guard < 500; guard++) {
-        const E = await read("editions", "editionOf", [e]);
-        if (N(E.state) !== 2) break;
-        const limit = BigInt(await read("editions", "limitOf", [e]));
-        const room = BigInt(E.capacity) - BigInt(E.placed);
-        let best: { id: bigint; ly: bigint; seq: bigint; k: number } | null = null;
-        for (let k = e + 1; k <= top; k++) {
-          for (const w of waiting.get(k) ?? []) if (w.ly <= limit && w.ly <= room && (!best || w.seq < best.seq)) best = { ...w, k };
-        }
-        if (!best) break;
-        if (!(await this.act(this.server, "editions", "promote", [best.id, e], "promote", N(best.id)))) break;
-        this.note("queue", N(best.id), `Room free in edition ${e} goes to the next unlisted land that fits it: #${best.id} moves up from edition ${best.k}, at edition ${e}'s reward.`);
-        waiting.set(best.k, (waiting.get(best.k) ?? []).filter((w) => w.id !== best!.id));
-        (waiting.get(e) ?? waiting.set(e, []).get(e)!).push({ id: best.id, ly: best.ly, seq: best.seq });
-      }
-    }
   }
 
   async pickVerifier(country: number, barred: Address, lapsed: Address, guardian: Address): Promise<Address> {

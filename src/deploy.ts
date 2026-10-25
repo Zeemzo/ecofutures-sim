@@ -44,8 +44,8 @@ export function initPlan(s: Scenario): { key: Key; args: PlanArg[] }[] {
     { key: "governance", args: [admin] },
     { key: "tree", args: [admin, text("Tree"), text("TR3")] },
     { key: "token", args: [admin, text("EcoFutures"), text("EFT"), usdt] },
-    { key: "overcharge", args: [admin, text("EcoFutures Relic"), text("RELIC")] },
-    { key: "editions", args: [admin, { value: BigInt(k.editionScale), shown: `${k.editionScale.toLocaleString("en-US")} land-years × F²` }, ...(MERGED ? [usd(k.baseFee)] : [])] },
+    { key: "overcharge", args: [admin, text("EcoFutures Gem"), text("GEM")] },
+    { key: "editions", args: [admin, { value: BigInt(k.editionScale), shown: `${k.editionScale.toLocaleString("en-US")} m²-years × F²` }, ...(MERGED ? [usd(k.baseFee)] : [])] },
   ];
 }
 
@@ -111,9 +111,9 @@ export async function deploy(s: Scenario, progress: (msg: string) => void = () =
       c.code,
       { flowId: c.flowId, minTermYears: c.minTerm, maxTermYears: c.maxTerm, listingWindow: Number(BigInt(c.listingDays) * DAY), postSaleWindow: Number(BigInt(c.postSaleDays) * DAY) },
       {
-        baseFee: BigInt(c.baseFee) * E18, deskRate: BigInt(c.deskRate) * E18, powerFee: BigInt(c.powerFee) * E18,
+        baseFee: BigInt(c.baseFee) * E18, powerFee: BigInt(c.powerFee) * E18,
         agreementFee: BigInt(c.agreementFee) * E18, registrationFixed: BigInt(c.registrationFixed) * E18,
-        registrationPerHa: BigInt(c.registrationPerHa) * E18, fieldRate: BigInt(c.fieldRate ?? 0) * E18,
+        registrationPerHa: BigInt(c.registrationPerHa) * E18,
       },
     ]);
   }

@@ -36,7 +36,7 @@ export type ContractConfig = {
   taxPermille: number;
   /** The Foundation's fee wallet: its share of each instalment. */
   foundationPermille: number;
-  /** Land-years per F² in the edition thresholds: 100,000 in production (1,000 hectare-years). */
+  /** Square-metre-years per F² in an edition: 10,000,000 in production (1,000 hectare-years; TR3 Model 4). */
   editionScale: number;
 };
 
@@ -51,8 +51,8 @@ export type CountryConfig = {
   maxTerm: number;
   listingDays: number;
   postSaleDays: number;
-  baseFee: number;       // USDT; 0 = the protocol default V
-  deskRate: number;      // USDT; 0 = V x 4/50
+  /** V, the one fee lever (TR3 Model 4 §11), USDT; 0 = the protocol default (USD 30), never below the Council's Vmin. */
+  baseFee: number;
   /** Fees 3-5 (TR3 Model B item 16, 20 Oct), USDT, paid upfront with the others and each paid out once its step is
    *  done: the power's registration to the Holder (only where the flow has a power), the agreement's to the verifier
    *  (only where it has an agreement to grant), and the covenant's -- fixed plus per hectare -- to the verifier at the
@@ -61,9 +61,6 @@ export type CountryConfig = {
   agreementFee: number;
   registrationFixed: number;
   registrationPerHa: number;
-  /** W, the field cost a hectare in fee 1 (TR3 Model B item 9), USDT; 0 = the protocol default (USD 7), never below the
-   *  Council's Wmin (USD 2). */
-  fieldRate: number;
   /** The simulated landowners' plots: most near the typical size, one in a hundred as large as the largest
    *  (log-normal), none below a tenth of the typical, and never above what the open edition allows. */
   typicalHa: number;
@@ -85,8 +82,8 @@ export type Behaviour = {
   /** Per thousand verifications, the land is sold (the buyer accedes, or not, to the Grantor Agreement). */
   landSalePermille: number;
   accedePct: number;
-  /** Percent of awake Relics whose owner uses them each month: an overcharge, or a forging. */
-  relicUsePct: number;
+  /** Percent of gem owners who use their stones each month (TR3 Model 4 §7-8): set into a new land they own, or fused. */
+  gemUsePct: number;
   arrivalsPerYear: number;
   /** Stop admitting landowners when the last edition begins. */
   fillLand: boolean;
@@ -170,7 +167,7 @@ export const PRODUCTION: ContractConfig = {
   reviewDays: 30, responseDays: 7, panelDays: 7, redrawDays: 7, haltAfter: 3,
   powerDays: 30, anchoringDays: 14, attestationDays: 30, decisionDays: 3, gtaAttestFromDays: 21, guardianAnchorFromDays: 7,
   restoreDays: 60, damageDays: 14, firstClaimDays: 3, reseatDays: 30, accessionDays: 180,
-  baseFee: 50, verifierPermille: 70, taxPermille: 30, foundationPermille: 10, editionScale: 100_000,
+  baseFee: 30, verifierPermille: 70, taxPermille: 30, foundationPermille: 10, editionScale: 10_000_000,
 };
 
 /** The contract settings production fixes: every timing, the halt threshold and the edition scale. A run may change
@@ -254,8 +251,8 @@ export function toProduction(s: Scenario): string[] {
 const country = (c: Partial<CountryConfig> & Pick<CountryConfig, "code" | "name" | "short" | "flowId">): CountryConfig => ({
   // fees 3-5 until counsel's figures are in (O1): USD 20 for the power's registration and for the agreement's, and for
   // the covenant's USD 30 (the notary and the registry) plus Sri Lanka's LC5 duty, 2 % of a USD 100/ha stated rental
-  minTerm: 3, maxTerm: 100, listingDays: LISTING_DAYS, postSaleDays: 0, baseFee: 0, deskRate: 0,
-  powerFee: 20, agreementFee: 20, registrationFixed: 30, registrationPerHa: 2, fieldRate: 0,
+  minTerm: 3, maxTerm: 99, listingDays: LISTING_DAYS, postSaleDays: 0, baseFee: 0,
+  powerFee: 20, agreementFee: 20, registrationFixed: 30, registrationPerHa: 2,
   typicalHa: 10, largestHa: 500, valuePerHaYear: 50,
   holders: 2, orgsPerHolder: 1, verifiersPerOrg: 2, weight: 25, ...c,
 });
@@ -263,9 +260,9 @@ const country = (c: Partial<CountryConfig> & Pick<CountryConfig, "code" | "name"
 export const COUNTRIES_V12: CountryConfig[] = [
   // plot sizes and values per hectare-year are placeholders until Ravi's figures are in (12 Oct)
   country({ code: 144, name: "Sri Lanka", short: "LK", flowId: 1, maxTerm: 99, holders: 3, orgsPerHolder: 2, weight: 35, typicalHa: 4, largestHa: 200, valuePerHaYear: 60 }),
-  country({ code: 360, name: "Indonesia", short: "ID", flowId: 1, maxTerm: 29, weight: 20, typicalHa: 15, largestHa: 2_000, valuePerHaYear: 30 }),
+  country({ code: 360, name: "Indonesia", short: "ID", flowId: 1, maxTerm: 27, weight: 20, typicalHa: 15, largestHa: 2_000, valuePerHaYear: 30 }),
   country({ code: 392, name: "Japan", short: "JP", flowId: 2, weight: 20, typicalHa: 3, largestHa: 150, valuePerHaYear: 80 }),
-  country({ code: 76, name: "Brazil", short: "BR", flowId: 3, minTerm: 16, postSaleDays: POST_SALE_DAYS, weight: 25, typicalHa: 80, largestHa: 10_000, valuePerHaYear: 15 }),
+  country({ code: 76, name: "Brazil", short: "BR", flowId: 3, minTerm: 18, postSaleDays: POST_SALE_DAYS, weight: 25, typicalHa: 80, largestHa: 10_000, valuePerHaYear: 15 }),
 ];
 
 /** Countries a user can add by ISO code, with their names. Any other code is accepted too. */
@@ -278,9 +275,9 @@ export const KNOWN_COUNTRIES: Record<number, [string, string]> = {
 };
 
 export const DEFAULT_BEHAVIOUR: Behaviour = {
-  refusePct: 2, kycLatePct: 10, kycFailPct: 20, landSalePermille: 10, accedePct: 80, relicUsePct: 50,
+  refusePct: 2, kycLatePct: 10, kycFailPct: 20, landSalePermille: 10, accedePct: 80, gemUsePct: 50,
   termOptions: [15, 35, 20, 30], wrongBlockPct: 25,
-  arrivalsPerYear: 20, fillLand: false, landGrowsWithEditions: false, arrivalYears: 15, maxRequests: 0, maxTermYears: 25,
+  arrivalsPerYear: 20, fillLand: false, landGrowsWithEditions: false, arrivalYears: 15, maxRequests: 0, maxTermYears: 24,
   cancelPct: 2, claimLapsePct: 2, unclaimedPct: 3, rejectPct: 1, abandonPct: 2, preMintChallengePct: 14, unsoldPct: 4,
   pathBLapseNothingPct: 8, pathBLapseUnattestedPct: 6,
   attestPct: 72, challengePct: 8,
@@ -300,18 +297,18 @@ const onlyCountry = (code: number) => COUNTRIES_V12.map((c) => ({ ...c, weight: 
 export const SCENARIOS: Scenario[] = [
   make("fifteen", "Fifteen years of arrivals", "The batch simulation: about eight landowners a year for fifteen years, every term run to its end.",
     { arrivalYears: 15, arrivalsPerYear: 7.5 }),
-  make("fill", "Until Edition 32 fills", "Landowners keep arriving until all 32 editions are placed -- 320,000,000 TR3 -- and no land enters again; then every term runs out. Editions are 1/1,000 of production's size, so they fill in a few decades. Plots grow with the editions, up to the largest each allows, so that 32 editions can fill: real plots are far smaller (see the Countries tab). Each land takes a large share of these small editions, and many covenants reach the 1,000,000 TR3 cap: what they cannot take drops to the Relics.",
-    { fillLand: true, landGrowsWithEditions: true, arrivalsPerYear: 30 }, COUNTRIES_V12, { editionScale: 100 }),
-  make("good-day", "A good day, every edition", "Nothing goes wrong: no challenges, cancellations or lapses, verifiers on time, every review window attested, every EFT sold. Landowners arrive until all 32 editions have filled. Editions are 1/5,000 of production's size, so they fill in a few years. Plots grow with the editions, up to the largest each allows, so that 32 editions can fill: real plots are far smaller (see the Countries tab). Each land takes a large share of these small editions, and many covenants reach the 1,000,000 TR3 cap: what they cannot take drops to the Relics.",
+  make("fill", "Until Edition 32 fills", "Landowners keep arriving until all 32 editions are placed -- 320,000,000 TR3 -- and no land enters again; then every term runs out. Editions are 1/1,000 of production's size, so they fill in a few decades. Plots grow with the editions, up to the largest each allows, so that 32 editions can fill: real plots are far smaller (see the Countries tab). Each land takes a large share of these small editions, and many reach the 1,000,000 TR3 title limit; a land over the open edition's limit waits for the first edition that takes it.",
+    { fillLand: true, landGrowsWithEditions: true, arrivalsPerYear: 30 }, COUNTRIES_V12, { editionScale: 10_000 }),
+  make("good-day", "A good day, every edition", "Nothing goes wrong: no challenges, cancellations or lapses, verifiers on time, every review window attested, every EFT sold. Landowners arrive until all 32 editions have filled. Editions are 1/5,000 of production's size, so they fill in a few years. Plots grow with the editions, up to the largest each allows, so that 32 editions can fill: real plots are far smaller (see the Countries tab). Each land takes a large share of these small editions, and many reach the 1,000,000 TR3 title limit.",
     { fillLand: true, landGrowsWithEditions: true, arrivalsPerYear: 40, cancelPct: 0, claimLapsePct: 0, unclaimedPct: 0, rejectPct: 0, abandonPct: 0, preMintChallengePct: 0, unsoldPct: 0,
       pathBLapseNothingPct: 0, pathBLapseUnattestedPct: 0, attestPct: 100, challengePct: 0, onTimePct: 100, littleLatePct: 0,
-      blockPermille: 0, governanceCalendar: false, refusePct: 0, kycLatePct: 0, landSalePermille: 0 }, COUNTRIES_V12, { editionScale: 20 }),
+      blockPermille: 0, governanceCalendar: false, refusePct: 0, kycLatePct: 0, landSalePermille: 0 }, COUNTRIES_V12, { editionScale: 2_000 }),
   make("slow-uptake", "Slow uptake", "Production editions and only three landowners a year for thirty years. No edition closes on time: Edition 1 stays open at its reward, however long it takes to fill.",
     { arrivalsPerYear: 3, arrivalYears: 30 }),
   make("one", "One covenant, start to finish", "A single Sri Lanka request with nothing going wrong: claim, verification, power, deed, mint, sale and every re-verification of its term. Use Next action to step through it.",
     { maxRequests: 1, arrivalsPerYear: 365, cancelPct: 0, claimLapsePct: 0, unclaimedPct: 0, rejectPct: 0, abandonPct: 0, preMintChallengePct: 0, unsoldPct: 0,
       pathBLapseNothingPct: 0, pathBLapseUnattestedPct: 0, attestPct: 100, challengePct: 0, onTimePct: 100, littleLatePct: 0, blockPermille: 0,
-      resalePct: 0, payeeSwitchPermille: 0, governanceCalendar: false, maxTermYears: 5, refusePct: 0, kycLatePct: 0, landSalePermille: 0 }, onlyCountry(144)),
+      resalePct: 0, payeeSwitchPermille: 0, governanceCalendar: false, maxTermYears: 3, refusePct: 0, kycLatePct: 0, landSalePermille: 0 }, onlyCountry(144)),
   make("challenges", "Challenge stress", "Half of all verifications challenged before the mint and two in five review windows challenged in the term, with every outcome equally likely.",
     { arrivalYears: 6, preMintChallengePct: 50, attestPct: 40, challengePct: 40, preMintOutcomes: [1, 1, 1, 1], termOutcomes: [1, 1, 1, 1], termOptions: [1, 1, 1, 1] }),
   make("holder-failure", "Trust Admin failure", "The governance calendar compressed: a Trust Admin frozen, one removed and replaced, a country suspended, a power revoked, all while covenants are in flight.",
@@ -320,8 +317,8 @@ export const SCENARIOS: Scenario[] = [
     { arrivalYears: 8, onTimePct: 40, littleLatePct: 30, attestPct: 25, challengePct: 5 }),
   make("pathb", "Path B lapses", "Brazil only: sales held in escrow until the recording is attested, with many recordings missing or unattested.",
     { arrivalYears: 6, pathBLapseNothingPct: 30, pathBLapseUnattestedPct: 30 }, onlyCountry(76)),
-  make("edition-race", "Edition race", "Editions 1/5,000 of production's size and many landowners: editions fill within months: a land that does not fit the room left goes to the next edition, which opens, and room released in a settling edition goes to the earliest unlisted land that fits it. Plots grow with the editions, up to the largest each allows, so that 32 editions can fill: real plots are far smaller (see the Countries tab). Many covenants reach the 1,000,000 TR3 cap: what they cannot take drops to the Relics.",
-    { fillLand: true, landGrowsWithEditions: true, arrivalsPerYear: 80 }, COUNTRIES_V12, { editionScale: 20 }),
+  make("edition-race", "Edition race", "Editions 1/5,000 of production's size and many landowners: editions fill within months. Lands are placed in turn; a land needing more than the room left straddles into the next edition, which opens, and room returned goes to the open edition for the next land in turn. Plots grow with the editions, up to the largest each allows, so that 32 editions can fill: real plots are far smaller (see the Countries tab).",
+    { fillLand: true, landGrowsWithEditions: true, arrivalsPerYear: 80 }, COUNTRIES_V12, { editionScale: 2_000 }),
   make("breaches", "Breaches and cancellations", "One verification in ten finds a breach; half the blocks before a sale end in cancellation, and term challenges mostly allege the landowner's breach (3D).",
     { arrivalYears: 6, blockPermille: 100, cancelOfBlockPct: 50, termOutcomes: [30, 60, 5, 5], termOptions: [5, 15, 10, 70] }),
   make("custom", "Custom", "Start from the defaults and set everything yourself.", {}),
@@ -332,12 +329,20 @@ export function cloneScenario(s: Scenario): Scenario {
   // settings saved by an earlier version (a file, or the app's own memory of the last setup) take the default for
   // anything added since: a 1.x country has no allowance, and a missing number reached the deploy as undefined
   c.behaviour = { ...DEFAULT_BEHAVIOUR, ...c.behaviour };
+  // the Relics' use became the gems' (TR3 Model 4)
+  const old = c.behaviour as any;
+  if (old.relicUsePct !== undefined) { if (old.gemUsePct === undefined) old.gemUsePct = old.relicUsePct; delete old.relicUsePct; }
+  // a term is 3, 6 ... 99 years (Model 4 §2.8): a saved setup's longest term rounds down to one
+  c.behaviour.maxTermYears = Math.max(3, c.behaviour.maxTermYears - (c.behaviour.maxTermYears % 3));
   c.contracts = { ...PRODUCTION, ...c.contracts };
   c.countries = (c.countries ?? []).map((k: any) => {
     // before 20 Oct a country had an execution allowance, fixed + per hectare: it carries over as fee 5's (item 16)
-    const { allowanceFixed, allowancePerHa, ...rest } = k;
+    // and before TR3 Model 4 (25 Oct) a country set D and W: V is the one lever now
+    const { allowanceFixed, allowancePerHa, deskRate, fieldRate, ...rest } = k;
     const was = allowanceFixed === undefined ? {} : { registrationFixed: allowanceFixed, registrationPerHa: allowancePerHa ?? 0 };
-    return country({ ...was, ...rest });
+    const k2 = country({ ...was, ...rest });
+    k2.maxTerm = Math.min(k2.maxTerm, 99); // terms end at 99 years (Model 4 §2.8)
+    return k2;
   });
   if (!c.flows?.length) c.flows = clone(FLOWS);
   // and a flow under a power listed its registration as a step of its own: it is part of the power now (20 Oct)
@@ -371,18 +376,21 @@ export function validate(s: Scenario): string[] {
     if (codes.has(k.code)) e.push(`Country ${k.code} appears twice.`);
     codes.add(k.code);
     if (!(k.code > 0 && k.code < 1000)) e.push(`${k.name}: the ISO numeric code must be 1-999.`);
-    for (const f of ["flowId", "minTerm", "maxTerm", "listingDays", "postSaleDays", "baseFee", "deskRate", "powerFee", "agreementFee", "registrationFixed", "registrationPerHa", "fieldRate", "typicalHa", "largestHa", "valuePerHaYear", "holders", "orgsPerHolder", "verifiersPerOrg", "weight"] as const)
+    for (const f of ["flowId", "minTerm", "maxTerm", "listingDays", "postSaleDays", "baseFee", "powerFee", "agreementFee", "registrationFixed", "registrationPerHa", "typicalHa", "largestHa", "valuePerHaYear", "holders", "orgsPerHolder", "verifiersPerOrg", "weight"] as const)
       if (!Number.isFinite(k[f]) || k[f] < 0) e.push(`${k.name}: ${f} must be a number, 0 or more.`);
     if (!(k.typicalHa >= 0.01 && k.largestHa >= k.typicalHa)) e.push(`${k.name}: the typical plot must be at least 0.01 ha, and the largest at least the typical.`);
-    if (k.minTerm < 3 || k.maxTerm > 100 || k.minTerm > k.maxTerm) e.push(`${k.name}: terms must run within 3-100 years, minimum first.`);
+    if (k.minTerm < 3 || k.maxTerm > 99 || k.minTerm > k.maxTerm) e.push(`${k.name}: terms must run within 3-99 years, minimum first.`);
+    else if (Math.ceil(k.minTerm / 3) * 3 > k.maxTerm) e.push(`${k.name}: a term is 3, 6 ... 99 years, and none lies within ${k.minTerm}-${k.maxTerm}.`);
     if (!s.flows.some((f) => f.id === k.flowId)) e.push(`${k.name}: flow ${k.flowId} is not defined.`);
     const f = s.flows.find((x) => x.id === k.flowId);
-    if (!(k.listingDays > 0)) e.push(`${k.name}: the listing window must be more than 0 days.`);
+    if (!(k.listingDays > 0 && k.listingDays <= 364)) e.push(`${k.name}: the listing window must be 1-364 days (a sale must leave the winner's identity check inside the Deed's 365 days).`);
     if (f && recordsAfterSale(s.flows, k.flowId) && k.postSaleDays <= 0) e.push(`${k.name}: its flow records after the sale, so it needs a post-sale window.`);
     if (k.holders < 1 || k.orgsPerHolder < 1 || k.verifiersPerOrg < 1) e.push(`${k.name}: needs at least one Trust Admin, organisation and verifier.`);
     if (k.holders * k.orgsPerHolder < 2) e.push(`${k.name}: needs two verifier organisations before its first verification (Flow Map p6).`);
   }
   if (!s.countries.some((k) => k.weight > 0)) e.push("At least one country must receive arrivals.");
+  // the Council's Vmin is the default V at launch: no country's V may be below it (TR3 Model 4 §11)
+  for (const k of s.countries) if (k.baseFee !== 0 && k.baseFee < c.baseFee) e.push(`${k.name}: its V (${k.baseFee}) is below the default V (${c.baseFee}), the Council's Vmin at launch; the country vote would revert.`);
   if (!(Number.isInteger(s.behaviour.claimDays) && s.behaviour.claimDays >= 0)) e.push("TR3 claims: a whole number of days, 0 or more.");
   return e;
 }
