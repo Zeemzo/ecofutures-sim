@@ -11,12 +11,12 @@ Download from [Releases](https://github.com/Zeemzo/ecofutures-sim/releases/lates
 
 | | |
 |---|---|
-| Mac with Apple silicon (M1–M4) | `EcoFutures.Simulator-2.5.1-arm64.dmg` |
-| Mac with Intel | `EcoFutures.Simulator-2.5.1.dmg` |
-| Windows (64-bit) | `EcoFutures.Simulator-2.5.1-win.zip` |
-| Linux (x64) | `EcoFutures.Simulator-2.5.1.AppImage`, or `ecofutures-simulator-2.5.1.tar.gz` |
-| Linux (ARM64) | `EcoFutures.Simulator-2.5.1-arm64.AppImage`, or `ecofutures-simulator-2.5.1-arm64.tar.gz` |
-| Android (phones and tablets, 64-bit, Android 8 or later) | `EcoFutures.Simulator-2.5.1-android.apk` |
+| Mac with Apple silicon (M1–M4) | `EcoFutures.Simulator-2.6.0-arm64.dmg` |
+| Mac with Intel | `EcoFutures.Simulator-2.6.0.dmg` |
+| Windows (64-bit) | `EcoFutures.Simulator-2.6.0-win.zip` |
+| Linux (x64) | `EcoFutures.Simulator-2.6.0.AppImage`, or `ecofutures-simulator-2.6.0.tar.gz` |
+| Linux (ARM64) | `EcoFutures.Simulator-2.6.0-arm64.AppImage`, or `ecofutures-simulator-2.6.0-arm64.tar.gz` |
+| Android (phones and tablets, 64-bit, Android 8 or later) | `EcoFutures.Simulator-2.6.0-android.apk` |
 
 **Mac.** Open the disk image and drag the app to Applications. The app is not signed with an Apple Developer ID,
 so the first time macOS refuses to open it: open **System Settings → Privacy & Security**, scroll to the message
@@ -29,8 +29,8 @@ unrecognised app, choose **More info → Run anyway**.
 **Linux.** Make the AppImage executable and run it:
 
 ```bash
-chmod +x EcoFutures.Simulator-2.5.1.AppImage
-./EcoFutures.Simulator-2.5.1.AppImage
+chmod +x EcoFutures.Simulator-2.6.0.AppImage
+./EcoFutures.Simulator-2.6.0.AppImage
 ```
 
 If it asks for FUSE, install `libfuse2` (`libfuse2t64` on Ubuntu 24.04), or use the `.tar.gz`: unpack it and run
@@ -55,12 +55,11 @@ back.
 
 - **Scenario**: what to investigate. Each sets the actors' behaviour:
   - *Fifteen years of arrivals* — about eight landowners a year for fifteen years, every term run to its end.
-  - *Until Edition 32 fills* — landowners arrive until all 32 editions are placed (320,000,000 TR3) and no land enters
-    again, then every term runs out. Its editions are 1/1,000 of production's size, so they fill in a few decades.
+  - *Until Edition 32 fills* — landowners arrive until all 32 editions are placed (320,000,000 TR3), then every term
+    runs out. Its editions are 1/1,000 of production's size, so they fill in a few decades.
   - *A good day, every edition* — nothing goes wrong (no challenges, cancellations or lapses; verifiers on time;
     every window attested; every EFT sold) while landowners arrive until all 32 editions have filled. Its editions
-    are small but its plots large, so many covenants reach the 1,000,000 TR3 cap; what they cannot take drops to the
-    Relics.
+    are small but its plots large, so many lands reach the 1,000,000 TR3 cap.
   - *Slow uptake* — production editions and three landowners a year for thirty years: no edition closes on time, so
     Edition 1 stays open at its reward however long it takes to fill.
   - *One covenant, start to finish* — a single Sri Lanka request with nothing going wrong; use **Next action**.
@@ -93,7 +92,7 @@ remembered between launches and can be saved to and loaded from a file. **Reset*
   again. Their choices are seeded, so the days replay exactly as before, unless you step in differently.
   **Pause** stops a journey where it is.
 - **The platform's figures**: the home page's market cap, TR3 mint price and its change, transactions, EFTs sold,
-  TR3 minted, the land left before the next edition and the TR3 held by the Relics (everything land did not earn), with
+  TR3 minted, the TR3 left before the next edition and the TR3 held by the records and gems (what land did not earn), with
   charts over the run; and the dashboard's figures for
   every wallet (patrons, guardians, verifiers, Trust Admins).
 - **The board**: every request by country and stage. Pick one for its facts, its instalments and history, and to
